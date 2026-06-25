@@ -10,5 +10,10 @@
     "build": "tsc --project tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^7.0.0"
   }
 }
