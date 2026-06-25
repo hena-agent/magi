@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    "apps/tui": {
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "packages/config": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/core": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/harness": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}
