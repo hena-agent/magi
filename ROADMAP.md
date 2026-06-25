@@ -6,8 +6,8 @@
 - `[~]` In progress or partially done.
 
 ## Current Focus
-- [~] Finish Phase 0 project skeleton so every later feature has a reliable TypeScript, Turbo, lint, test, and dead-code harness.
-- [ ] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
+- [x] Finish Phase 0 project skeleton so every later feature has a reliable TypeScript, Turbo, lint, test, and dead-code harness.
+- [~] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
 - [ ] Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
 
 ## Phase 0: Project Skeleton
@@ -22,9 +22,9 @@
 - [x] Add `packages/core`, `packages/config`, and `packages/harness` skeletons.
 - [x] Make root `pnpm dev` run the TUI in watch mode.
 - [x] Update `AGENTS.md` with exact commands once they exist.
-- [ ] Add AI SDK dependencies for primary model calls.
-- [ ] Add MCP SDK dependency for future tool interoperability.
-- [ ] Add config loading for model providers, permissions, and verification commands.
+- [x] Add AI SDK dependencies for primary model calls.
+- [x] Add MCP SDK dependency for future tool interoperability.
+- [x] Add config loading for model providers, permissions, and verification commands.
 
 ## Phase 1: Self-Hosting Agent Shell
 - [ ] Implement interactive prompt input in the TUI shell.
