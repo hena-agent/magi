@@ -20,7 +20,7 @@
 - MAGI Mode: a high-assurance loop that adds sandbox evidence, dynamic review lenses, and schema-bound multi-engine voting.
 - The assistant should enter MAGI Mode for risky plans, large diffs, security/auth/data/infra changes, repeated test failures, or explicit user requests.
 
-## MVP Scope
+## Product MVP Scope
 - Node.js and TypeScript implementation.
 - Terminal-first interactive coding assistant.
 - Model/provider access through Vercel AI SDK.

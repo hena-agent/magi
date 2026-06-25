@@ -33,7 +33,7 @@
 - The assistant can use test/build/lint failures to revise its own code changes.
 
 ## Phase 3: MAGI Core
-- Do not start MAGI Core until Phase 1 can self-host basic repo edits.
+- Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
 - Implement `sharedContextHistory` builder.
 - Implement dynamic review lens definitions.
 - Implement review request and response validation.

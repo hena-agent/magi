@@ -8,7 +8,7 @@
 
 ## Bootstrap Priority
 - The first milestone is a rough self-hosting CLI agent that can develop this repo.
-- Defer MAGI consensus, TUI polish, daemon mode, plugin systems, sandbox isolation, and CI/PR gates until the assistant can read, edit, run commands, fix failures, and summarize changes in this repo.
+- Defer MAGI consensus, TUI work, daemon mode, plugin systems, sandbox isolation, and CI/PR gates until the assistant can read, edit, run commands, fix failures, and summarize changes in this repo.
 - Prefer the smallest working loop over architectural completeness.
 
 ## Reference Strategy

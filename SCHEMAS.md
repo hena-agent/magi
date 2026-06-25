@@ -21,6 +21,11 @@
 - `ConsensusDecision`
 - `DecisionTrail`
 
+## Shared Types
+```ts
+type EngineId = "claude" | "gpt" | "gemini" | (string & {})
+```
+
 ## Task
 ```ts
 type Task = {
@@ -103,8 +108,6 @@ type VerificationRun = {
 
 ## Review Lens
 ```ts
-type EngineId = "claude" | "gpt" | "gemini" | (string & {})
-
 type ReviewLens = {
   name: "architecture" | "security" | "performance" | "custom"
   focusGuidelines: string[]
