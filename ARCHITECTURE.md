@@ -6,14 +6,15 @@
 - Keep MAGI core responsible for shared history, review lenses, engine selection, votes, and consensus decisions.
 
 ## Bootstrap Architecture
-- Start with a direct CLI process, not a daemon/TUI/server architecture.
+- Start with a direct terminal process, not a daemon/server architecture.
+- Use the current Ink TUI only as the bootstrap shell; defer rich terminal UX until the self-hosting agent loop works.
 - Use a simple local session event log before adding durable database storage.
 - Implement a minimal typed tool registry with `read`, `glob`, `grep`, `apply_patch`, `bash`, and optional `todowrite`.
 - Use one primary model adapter first; MAGI multi-engine review comes after the normal coding loop works.
 - Keep interfaces narrow so the bootstrap loop can later be replaced by a richer session runner.
 
 ## Main Components
-- CLI shell: receives user input, streams assistant output, and displays tool activity; richer TUI can come after self-hosting works.
+- TUI shell: receives user input, streams assistant output, and displays tool activity; richer TUI can come after self-hosting works.
 - Session manager: stores conversation state, compact summaries, tool events, and decision trails.
 - Workspace adapter: resolves repo paths, reads files, searches content, and applies patches.
 - Tool registry: exposes typed tools with input schemas, permission levels, and audit behavior.

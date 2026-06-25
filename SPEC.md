@@ -6,9 +6,9 @@
 - MAGI improves coding agents by adding structured self-doubt, runtime evidence, and cross-engine review at decision points.
 
 ## Bootstrap MVP
-- Build the smallest CLI agent that can work on this repository.
+- Build the smallest terminal agent that can work on this repository.
 - Required: prompt input, model call, file read/search, patch application, shell command execution, verification feedback, and final summary.
-- Not required: TUI, daemon, plugin system, multi-engine consensus, sandbox isolation, persistent database, IDE integration, or CI mode.
+- Not required: rich TUI, daemon, plugin system, multi-engine consensus, sandbox isolation, persistent database, IDE integration, or CI mode.
 - The bootstrap agent should be good enough to implement the next roadmap phase with human supervision.
 
 ## Target Users
