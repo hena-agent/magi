@@ -1,0 +1,81 @@
+# ARCHITECTURE.md
+
+## Runtime Shape
+- Build the product as a Node.js and TypeScript coding assistant with a separable MAGI consensus core.
+- Keep the assistant shell responsible for UX, sessions, tool execution, permissions, and file changes.
+- Keep MAGI core responsible for shared history, review lenses, engine selection, votes, and consensus decisions.
+
+## Bootstrap Architecture
+- Start with a direct CLI process, not a daemon/TUI/server architecture.
+- Use a simple local session event log before adding durable database storage.
+- Implement a minimal typed tool registry with `read`, `glob`, `grep`, `apply_patch`, `bash`, and optional `todowrite`.
+- Use one primary model adapter first; MAGI multi-engine review comes after the normal coding loop works.
+- Keep interfaces narrow so the bootstrap loop can later be replaced by a richer session runner.
+
+## Main Components
+- CLI shell: receives user input, streams assistant output, and displays tool activity; richer TUI can come after self-hosting works.
+- Session manager: stores conversation state, compact summaries, tool events, and decision trails.
+- Workspace adapter: resolves repo paths, reads files, searches content, and applies patches.
+- Tool registry: exposes typed tools with input schemas, permission levels, and audit behavior.
+- Permission policy: decides whether a tool call is allowed, denied, or requires user approval.
+- Shell runner: executes commands, captures stdout/stderr/exit code, and handles long-running processes.
+- Patch applier: applies controlled file edits and records changed paths.
+- Verification runner: runs configured lint/typecheck/test/build commands when available.
+- Sandbox runner: runs risky verification in an isolated environment when available.
+- Model adapter layer: uses Vercel AI SDK for provider calls, streaming, structured outputs, and tool-capable model interactions.
+- MCP integration layer: uses the official MCP SDK to connect external tools and expose MAGI tools where useful.
+- MAGI consensus core: selects engines, builds shared history, injects review lenses, collects votes, and applies the consensus matrix.
+- Audit store: persists enough data to reconstruct plans, diffs, logs, reviews, votes, and final decisions.
+
+## Normal Agent Loop
+1. Receive the user task.
+2. Inspect high-value repo sources before guessing.
+3. Produce a compact plan when the task is non-trivial.
+4. Read and edit only relevant files.
+5. Run focused verification when commands are known.
+6. Feed failures back into the loop.
+7. Revise until the task is complete or blocked.
+8. Summarize changed files, verification results, and residual risks.
+
+## MAGI Gate Triggers
+- User explicitly asks for MAGI, consensus, deep review, or high-assurance validation.
+- Planned change crosses multiple subsystems or packages.
+- Diff touches auth, permissions, secrets, data migrations, infra, sandboxing, model routing, or command execution.
+- Verification fails repeatedly and normal repair is not converging.
+- The assistant is about to accept a large or risky final diff.
+
+## MAGI Mode Loop
+1. Capture requirement, current plan, diff or proposed change set, tool results, and verification logs.
+2. Select an initiating engine with adaptive weighted roulette when a new plan/change set is needed.
+3. Run build/tests in sandbox when available and bind logs into `sharedContextHistory`.
+4. Assign dynamic review lenses to non-initiating engines.
+5. Request structured reviews from reviewers using the same shared history.
+6. Let the initiating engine revise or re-plan from the review evidence.
+7. Request schema-bound final votes from all engines using the same append-only shared history.
+8. Apply the consensus matrix exactly.
+9. Continue, revise, reject, or ask the user depending on the decision.
+
+## Tool System
+- Tools must declare `name`, `description`, `inputSchema`, `riskLevel`, `requiresApproval`, and `executor`.
+- Tool results must include status, output, error text, changed paths, and timing where applicable.
+- File writes and shell commands must be auditable.
+- Destructive git operations, broad deletes, secret access, network actions, and external deployments require explicit approval.
+- Read-only inspection should be low-friction, but still logged when it influences MAGI decisions.
+
+## Permission Model
+- Default to least privilege.
+- Separate read, write, shell, network, git, and sandbox permissions.
+- Deny destructive actions unless explicitly requested or approved.
+- Never hide command output that affects a final decision.
+
+## Reference Boundaries
+- OpenCode, Pi, Cline, Aider, and OpenHands are references, not default forks.
+- Reuse maintained TypeScript-native packages when they reduce non-MAGI infrastructure work.
+- Keep consensus, shared-history voting, adaptive weighting, and dynamic lens injection as MAGI-owned logic.
+
+## Foundation Dependencies
+- Use AI SDK as the default model/provider/tool-call foundation.
+- Use MCP SDK as the default external tool interoperability foundation.
+- Use SDKs aggressively for portable infrastructure, but reject default dependencies that require a proprietary hosted control plane or make MAGI hard to self-host.
+- Vercel AI SDK is acceptable as a library dependency; Vercel AI Gateway, deployment, and account-bound services must stay optional.
+- MAGI-specific consensus, shared-history voting, adaptive weighting, and dynamic lens injection remain custom product logic.
