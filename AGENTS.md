@@ -96,4 +96,16 @@
 - Keep the harness backend deterministic where possible; do not use another LLM as a central operator.
 - Store the full decision trail so HITL review can inspect final diff, sandbox logs, review feedback, and votes.
 - Do not auto-accept risky changes without unanimous approval.
-- Once code exists, update this file with exact commands for build, test, lint, sandbox execution, and focused verification.
+
+## Development Commands
+- Install dependencies: `pnpm install`
+- Run the root dev harness and TUI app: `pnpm dev`
+- Build all workspaces: `pnpm build`
+- Typecheck all workspaces: `pnpm typecheck`
+- Run tests: `pnpm test`
+- Run Biome lint: `pnpm lint`
+- Run Biome format check: `pnpm format:check`
+- Format files: `pnpm format`
+- Run combined local checks: `pnpm check`
+- Run unused dependency/export checks: `pnpm knip`
+- Sandbox execution: not configured yet.
