@@ -1,10 +1,10 @@
-import { getDefaultConfig } from "@magi/config";
+import { loadConfig } from "@magi/config";
 import { createTask } from "@magi/core";
 import { Box, Text, useApp, useInput } from "ink";
 
 export function App() {
   const { exit } = useApp();
-  const config = getDefaultConfig();
+  const config = loadConfig();
   const task = createTask("Bootstrap MAGI TUI");
   const canReadInput = Boolean(process.stdin.isTTY && process.stdin.setRawMode);
 
