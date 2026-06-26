@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "bin": {
-    "magi": "./src/index.tsx"
+    "magi": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
-    "dev": "tsx watch src/index.tsx",
+    "build": "tsc --project tsconfig.build.json",
+    "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
+    "start": "node dist/index.js",
+    "start:tsx": "tsx src/index.tsx",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
     "@magi/config": "workspace:*",
     "@magi/core": "workspace:*",
+    "@magi/harness": "workspace:*",
     "ink": "^6.5.1",
     "react": "^19.2.3"
   },
