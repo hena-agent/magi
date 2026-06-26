@@ -7,7 +7,7 @@
 
 ## Current Focus
 - [x] Finish Phase 0 project skeleton so every later feature has a reliable TypeScript, Turbo, lint, test, and dead-code harness.
-- [~] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
+- [x] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
 - [ ] Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
 
 ## Phase 0: Project Skeleton
@@ -27,18 +27,18 @@
 - [x] Add config loading for model providers, permissions, and verification commands.
 
 ## Phase 1: Self-Hosting Agent Shell
-- [ ] Implement interactive prompt input in the TUI shell.
-- [ ] Add one primary model adapter through AI SDK.
-- [ ] Add minimal builtin tools: `read`, `glob`, `grep`, `apply_patch`, and `bash`.
-- [ ] Add simple permission prompts for write and shell actions.
-- [ ] Store session events as JSONL or another simple local format.
-- [ ] Run verification commands manually or from config.
-- [ ] Summarize changed files, verification results, and residual risks.
-- [ ] Use this agent to make subsequent changes to the MAGI repo.
+- [x] Implement interactive prompt input in the TUI shell.
+- [x] Add one primary model adapter through AI SDK.
+- [x] Add minimal builtin tools: `read`, `glob`, `grep`, `apply_patch`, and `bash`.
+- [x] Add simple permission prompts for write and shell actions.
+- [x] Store session events as JSONL or another simple local format.
+- [x] Run verification commands manually or from config.
+- [x] Summarize changed files, verification results, and residual risks.
+- [x] Use this agent to make subsequent changes to the MAGI repo.
 
 ## Bootstrap Completion Checklist
-- [ ] A user can run MAGI in this repo and complete a small supervised coding task.
-- [ ] The assistant can inspect files, apply patches, run shell commands, and summarize changed files.
+- [x] A user can run MAGI in this repo and complete a small supervised coding task.
+- [x] The assistant can inspect files, apply patches, run shell commands, and summarize changed files.
 - [ ] The assistant can capture command failures and use them to revise its own code changes.
 - [ ] No daemon, plugin system, sandbox, or MAGI consensus is required for bootstrap completion.
 
