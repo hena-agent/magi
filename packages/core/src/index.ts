@@ -2,6 +2,15 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { LanguageModel } from "ai";
 
+export { createSessionStore } from "./session.js";
+export { createPrimaryModelAdapter } from "./model.js";
+export { createToolCall, getToolPermission, runTool } from "./tools.js";
+export { summarizeWorkspace } from "./summary.js";
+export type { PrimaryModelAdapter } from "./model.js";
+export type { Session, SessionEvent, SessionEventType, SessionStore } from "./session.js";
+export type { ChangeSummary } from "./summary.js";
+export type { ToolCall, ToolName, ToolPermission, ToolResult } from "./tools.js";
+
 export type Task = {
   id: string;
   userRequirement: string;

@@ -4,16 +4,27 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.build.json",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
     "test": "vitest run",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "ai": "^7.0.0"
+    "ai": "^7.0.0",
+    "better-sqlite3": "^12.11.1",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.10"
   }
 }
