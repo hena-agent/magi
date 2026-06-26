@@ -99,7 +99,8 @@
 
 ## Development Commands
 - Install dependencies: `pnpm install`
-- Run the root dev harness and TUI app: `pnpm dev`
+- Run incremental build watchers for all workspaces: `pnpm dev`
+- Run the built TUI app after building: `pnpm --filter @magi/tui start`
 - Build all workspaces: `pnpm build`
 - Typecheck all workspaces: `pnpm typecheck`
 - Run tests: `pnpm test`
