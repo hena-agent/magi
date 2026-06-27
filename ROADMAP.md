@@ -39,16 +39,16 @@
 ## Bootstrap Completion Checklist
 - [x] A user can run MAGI in this repo and complete a small supervised coding task.
 - [x] The assistant can inspect files, apply patches, run shell commands, and summarize changed files.
-- [ ] The assistant can capture command failures and use them to revise its own code changes.
+- [x] The assistant can capture command failures and use them to revise its own code changes.
 - [ ] No daemon, plugin system, sandbox, or MAGI consensus is required for bootstrap completion.
 
 ## Phase 2: Verification Feedback Loop
-- [ ] Detect or configure project verification commands.
-- [ ] Run focused lint/typecheck/test/build commands.
-- [ ] Capture stdout, stderr, exit code, and duration.
-- [ ] Feed failures back into the agent loop.
-- [ ] Store verification events in the session history.
-- [ ] The assistant can use test/build/lint failures to revise its own code changes.
+- [x] Detect or configure project verification commands.
+- [x] Run focused lint/typecheck/test/build commands.
+- [x] Capture stdout, stderr, exit code, and duration.
+- [x] Feed failures back into the agent loop.
+- [x] Store verification events in the session history.
+- [x] The assistant can use test/build/lint failures to revise its own code changes.
 
 ## Phase 3: MAGI Core
 - [ ] Implement `sharedContextHistory` builder.
