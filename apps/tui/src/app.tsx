@@ -1,10 +1,13 @@
 import { loadConfig } from "@magi/config";
 import { runVerificationCommands } from "@magi/harness";
 import {
+  buildRevisionContext,
   createPrimaryModelAdapter,
   createSessionStore,
   createTask,
   createToolCall,
+  extractFirstDiffBlock,
+  getLatestProposedPatch,
   getToolPermission,
   runTool,
   summarizeWorkspace,
@@ -24,7 +27,15 @@ type PendingPermission = {
   description: string;
 };
 
-const shellCommands = ["bash", "apply_patch", "verify", "summary", "help"];
+const shellCommands = [
+  "bash",
+  "apply_patch",
+  "apply_last_patch",
+  "verify",
+  "revise",
+  "summary",
+  "help",
+];
 
 export function App() {
   const { exit } = useApp();
@@ -119,7 +130,17 @@ export function App() {
     }
 
     if (command === "verify") {
-      await runVerification();
+      await runVerification(args.join(" ").trim());
+      return;
+    }
+
+    if (command === "revise") {
+      await reviseFromVerificationFailures();
+      return;
+    }
+
+    if (command === "apply_last_patch") {
+      await applyLastProposedPatch();
       return;
     }
 
@@ -149,6 +170,7 @@ export function App() {
         type: "assistant_message",
         payload: { content: response.text },
       });
+      saveProposedPatch(event.id, response.text);
       addMessage(`Assistant: ${truncate(response.text)}`, event.id);
     } catch (error) {
       addMessage(`Assistant error: ${formatError(error)}`);
@@ -220,12 +242,12 @@ export function App() {
     }
   }
 
-  async function runVerification(): Promise<void> {
+  async function runVerification(command: string): Promise<void> {
     setIsBusy(true);
 
     try {
       const results = await runVerificationCommands({
-        commands: config.verificationCommands,
+        commands: command.length > 0 ? [command] : config.verificationCommands,
         cwd: config.workspaceRoot,
       });
 
@@ -245,6 +267,66 @@ export function App() {
     });
     store.appendEvent({ sessionId: session.id, type: "summary", payload: summary });
     addMessage(summary.text);
+  }
+
+  async function reviseFromVerificationFailures(): Promise<void> {
+    setIsBusy(true);
+
+    try {
+      const context = buildRevisionContext({
+        workspaceRoot: config.workspaceRoot,
+        events: store.listEvents(session.id),
+      });
+
+      if (context.verificationFailures.length === 0) {
+        addMessage("No verification failures found. Run /verify first.");
+        return;
+      }
+
+      const adapter = createPrimaryModelAdapter(config);
+      const response = await adapter.generateText({
+        system:
+          "You are MAGI revising a local code change. Use the provided verification failures and changed files. Suggest the smallest correct fix. If a patch is appropriate, provide a git-apply-compatible unified diff inside a ```diff fenced code block. Do not claim you ran commands.",
+        prompt: context.text,
+      });
+      const event = store.appendEvent({
+        sessionId: session.id,
+        type: "assistant_message",
+        payload: { content: response.text, revision: true },
+      });
+      saveProposedPatch(event.id, response.text);
+      addMessage(`Revision: ${truncate(response.text)}`, event.id);
+    } catch (error) {
+      addMessage(`Revision error: ${formatError(error)}`);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function applyLastProposedPatch(): Promise<void> {
+    const patch = getLatestProposedPatch(store.listEvents(session.id));
+
+    if (!patch) {
+      addMessage("No proposed patch found. Run /revise first.");
+      return;
+    }
+
+    await runToolWithPermission(createToolCall("apply_patch", { patch }));
+  }
+
+  function saveProposedPatch(sourceEventId: string, content: string): void {
+    const patch = extractFirstDiffBlock(content);
+
+    if (!patch) {
+      return;
+    }
+
+    const event = store.appendEvent({
+      sessionId: session.id,
+      type: "proposed_patch",
+      payload: { sourceEventId, patch },
+    });
+    addMessage(`Proposed patch saved as event #${event.sequence}. Use /apply_last_patch to apply.`);
   }
 
   function addMessage(content: string, id: string = crypto.randomUUID()): void {
