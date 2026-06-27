@@ -21,6 +21,7 @@ export type SessionEventType =
   | "tool_call"
   | "tool_result"
   | "permission_decision"
+  | "proposed_patch"
   | "verification_result"
   | "summary";
 

@@ -5,11 +5,19 @@ import type { LanguageModel } from "ai";
 export { createSessionStore } from "./session.js";
 export { createPrimaryModelAdapter } from "./model.js";
 export { createToolCall, getToolPermission, runTool } from "./tools.js";
+export {
+  buildRevisionContext,
+  extractFirstDiffBlock,
+  getLatestProposedPatch,
+} from "./revision-context.js";
 export { summarizeWorkspace } from "./summary.js";
+export { getLatestVerificationFailures, truncateTail } from "./verification-context.js";
 export type { PrimaryModelAdapter } from "./model.js";
+export type { RevisionContext } from "./revision-context.js";
 export type { Session, SessionEvent, SessionEventType, SessionStore } from "./session.js";
 export type { ChangeSummary } from "./summary.js";
 export type { ToolCall, ToolName, ToolPermission, ToolResult } from "./tools.js";
+export type { VerificationFailure, VerificationFailureContext } from "./verification-context.js";
 
 export type Task = {
   id: string;
