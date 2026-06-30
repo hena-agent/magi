@@ -2,6 +2,7 @@ import { loadConfig } from "@magi/config";
 import { runVerificationCommands } from "@magi/harness";
 import {
   buildRevisionContext,
+  buildSharedContextHistory,
   createPrimaryModelAdapter,
   createSessionStore,
   createTask,
@@ -10,6 +11,7 @@ import {
   getLatestProposedPatch,
   getToolPermission,
   runTool,
+  selectReviewLenses,
   summarizeWorkspace,
   type ToolCall,
   type ToolName,
@@ -33,6 +35,7 @@ const shellCommands = [
   "apply_last_patch",
   "verify",
   "revise",
+  "magi_preview",
   "summary",
   "help",
 ];
@@ -146,6 +149,11 @@ export function App() {
 
     if (command === "summary") {
       await runSummary();
+      return;
+    }
+
+    if (command === "magi_preview") {
+      previewMagiContext();
       return;
     }
 
@@ -327,6 +335,32 @@ export function App() {
       payload: { sourceEventId, patch },
     });
     addMessage(`Proposed patch saved as event #${event.sequence}. Use /apply_last_patch to apply.`);
+  }
+
+  function previewMagiContext(): void {
+    const events = store.listEvents(session.id);
+    const latestUserMessage = [...events].reverse().find((event) => event.type === "user_message");
+    const requirementPayload = latestUserMessage?.payload as { content?: unknown } | undefined;
+    const requirement =
+      typeof requirementPayload?.content === "string"
+        ? requirementPayload.content
+        : "No user requirement yet.";
+    const sharedContextHistory = buildSharedContextHistory({ requirement, sessionEvents: events });
+    const summary = summarizeWorkspace({ workspaceRoot: config.workspaceRoot, events });
+    const lenses = selectReviewLenses({
+      riskLevel: summary.residualRisk,
+      changedFiles: summary.changedFiles,
+    });
+
+    addMessage(
+      [
+        "MAGI preview:",
+        `- shared context entries: ${sharedContextHistory.entries.length}`,
+        `- selected lenses: ${lenses.map((lens) => lens.id).join(", ")}`,
+        `- residual risk: ${summary.residualRisk}`,
+        "- core ready: shared context, lenses, review validation, vote validation, consensus matrix, decision trails",
+      ].join("\n"),
+    );
   }
 
   function addMessage(content: string, id: string = crypto.randomUUID()): void {
