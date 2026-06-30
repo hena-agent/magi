@@ -8,7 +8,7 @@
 ## Current Focus
 - [x] Finish Phase 0 project skeleton so every later feature has a reliable TypeScript, Turbo, lint, test, and dead-code harness.
 - [x] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
-- [ ] Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
+- [x] Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
 
 ## Phase 0: Project Skeleton
 - [x] Initialize pnpm workspace.
@@ -51,12 +51,12 @@
 - [x] The assistant can use test/build/lint failures to revise its own code changes.
 
 ## Phase 3: MAGI Core
-- [ ] Implement `sharedContextHistory` builder.
-- [ ] Implement dynamic review lens definitions.
-- [ ] Implement review request and response validation.
-- [ ] Implement vote response validation.
-- [ ] Implement the consensus matrix exactly.
-- [ ] Persist decision trails for replay and HITL review.
+- [x] Implement `sharedContextHistory` builder.
+- [x] Implement dynamic review lens definitions.
+- [x] Implement review request and response validation.
+- [x] Implement vote response validation.
+- [x] Implement the consensus matrix exactly.
+- [x] Persist decision trails for replay and HITL review.
 
 ## Phase 4: Multi-Engine Support
 - [ ] Implement model adapter interface.
