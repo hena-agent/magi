@@ -18,6 +18,7 @@ export type Session = {
 export type SessionEventType =
   | "user_message"
   | "assistant_message"
+  | "magi_decision_trail"
   | "tool_call"
   | "tool_result"
   | "permission_decision"

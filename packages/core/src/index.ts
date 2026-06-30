@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { LanguageModel } from "ai";
 
 export { createSessionStore } from "./session.js";
+export * from "./magi/index.js";
 export { createPrimaryModelAdapter } from "./model.js";
 export { createToolCall, getToolPermission, runTool } from "./tools.js";
 export {
