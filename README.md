@@ -1,6 +1,6 @@
 # MAGI
 
-MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell that can read files, run simple tools, persist session history, execute verification commands, and summarize changes.
+MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell that can read files, run simple tools, persist session history, execute verification commands, revise from failures, and summarize changes.
 
 MAGI consensus and multi-engine review are intentionally not part of the current bootstrap loop yet. See `ROADMAP.md` for planned phases.
 
@@ -46,11 +46,52 @@ Example:
     "shell": "prompt",
     "network": "prompt"
   },
-  "verificationCommands": ["pnpm typecheck", "pnpm test", "pnpm lint", "pnpm knip"]
+  "verificationCommands": ["pnpm typecheck", "pnpm test", "pnpm lint", "pnpm knip"],
+  "agent": {
+    "maxIterations": 30
+  },
+  "session": {
+    "startup": "new"
+  }
 }
 ```
 
-General LLM prompts require a configured model provider and matching API key environment variable. Slash commands such as `/read`, `/glob`, `/grep`, `/verify`, and `/summary` can be useful without an API key.
+DeepSeek can be configured directly. MAGI uses DeepSeek through its OpenAI-compatible API and defaults `baseUrl` to `https://api.deepseek.com` when omitted:
+
+```json
+{
+  "modelProviders": [
+    {
+      "id": "primary",
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  ]
+}
+```
+
+Custom OpenAI-compatible endpoints can use `provider: "custom"` with an explicit `baseUrl`:
+
+```json
+{
+  "modelProviders": [
+    {
+      "id": "primary",
+      "provider": "custom",
+      "model": "your-model-name",
+      "apiKeyEnv": "CUSTOM_API_KEY",
+      "baseUrl": "https://example.com/v1"
+    }
+  ]
+}
+```
+
+Plain-language agent prompts require a configured model provider and matching API key environment variable. Slash commands such as `/read`, `/glob`, `/grep`, `/verify`, and `/summary` can be useful without an API key.
+
+The single-engine agent loop uses `agent.maxIterations` as a step budget. When it reaches the final step, tools are disabled and the model is asked to provide a final answer from the observations gathered so far instead of stopping with a hard error.
+
+MAGI starts in a draft session by default. It creates a saved session only after the first normal prompt receives a successful assistant response. Set `session.startup` to `"resume"` to automatically resume the latest saved session for the current workspace.
 
 ## Run MAGI
 
@@ -147,16 +188,26 @@ Inside the TUI:
 /apply_patch path/to/change.patch
 /verify
 /summary
+/sessions
+/sessions all
+/resume 1
+/new
+/rename Better session title
+/history 20
 ```
 
 Notes:
 
-- Plain text input is sent to the primary model adapter.
+- Plain text input runs a single-engine agent turn that can read/search files, run verification, and propose patches.
 - `/read`, `/glob`, and `/grep` are read tools.
 - `/bash` is a shell tool and follows the configured shell permission policy.
 - `/apply_patch` applies a `git apply` compatible patch file and follows the configured write permission policy.
 - `/verify` runs configured verification commands.
 - `/summary` reports changed files, verification results, and residual risk.
+- MAGI starts in a draft session by default and saves it only after the first successful normal prompt.
+- `/sessions` lists meaningful saved sessions with display titles, event counts, and IDs; `/sessions all` includes empty and command-only legacy sessions.
+- `/resume <id-or-number>` switches sessions, and `/new` resets to a fresh draft session.
+- `/rename <title>` updates the current session title and `/history [limit]` shows recent raw session events.
 
 ## Workspace Layout
 
@@ -179,4 +230,4 @@ The database is ignored by git. It contains sessions and append-only session eve
 
 ## Current Status
 
-Phase 0 and Phase 1 are complete. The next major focus is Phase 2: verification feedback loop, where command failures should be captured and used to revise MAGI's own code changes.
+Phase 0 through Phase 3 are complete. The TUI now includes a default single-engine agent turn loop for normal prompts while MAGI consensus remains available as core infrastructure and preview/debug commands.

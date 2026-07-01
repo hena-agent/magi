@@ -20,7 +20,7 @@
 - [x] Add Vitest test harness.
 - [x] Add minimal `apps/tui` entrypoint.
 - [x] Add `packages/core`, `packages/config`, and `packages/harness` skeletons.
-- [x] Make root `pnpm dev` run the TUI in watch mode.
+- [x] Make root `pnpm dev` run incremental workspace build watchers.
 - [x] Update `AGENTS.md` with exact commands once they exist.
 - [x] Add AI SDK dependencies for primary model calls.
 - [x] Add MCP SDK dependency for future tool interoperability.
@@ -57,6 +57,21 @@
 - [x] Implement vote response validation.
 - [x] Implement the consensus matrix exactly.
 - [x] Persist decision trails for replay and HITL review.
+
+## Phase 3.5: OpenCode-Style Runner And Session Parity
+- [x] Start TUI sessions in draft mode and persist only after the first successful normal prompt.
+- [x] Add saved session listing, resume, rename, history, and fresh draft reset commands.
+- [x] Inject recent saved session history into normal agent turns.
+- [x] Replace hard max-iteration stop with a final text-only response step.
+- [x] Filter empty and command-only legacy sessions from the default session list.
+- [ ] Replace the fixed JSON action loop with an event-driven continuation loop based on pending tool results and queued user input.
+- [ ] Persist typed agent step lifecycle events such as step started, assistant started, step ended, provider error, and interruption.
+- [ ] Move from JSON text actions toward provider-native tool calls through the AI SDK tool interface.
+- [ ] Add durable tool settlement states for pending, running, succeeded, failed, denied, and interrupted tools.
+- [ ] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
+- [ ] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
+- [ ] Add queued and steering input handling while an agent run is active.
+- [ ] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
 
 ## Phase 4: Multi-Engine Support
 - [ ] Implement model adapter interface.
