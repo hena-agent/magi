@@ -1,87 +1,117 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { SessionEvent } from "../session.js";
+import { compactSessionContext } from "./context-compaction.js";
 
 export function buildAgentSessionContext(input: {
   events: SessionEvent[];
   maxEvents?: number;
   maxCharacters?: number;
 }): string {
-  const maxEvents = input.maxEvents ?? 30;
-  const maxCharacters = input.maxCharacters ?? 18_000;
-  const entries = input.events.slice(-maxEvents).flatMap(formatEvent);
-  const text = entries.length === 0 ? "No prior session context." : entries.join("\n\n");
-
-  return truncateHead(text, maxCharacters);
+  return compactSessionContext({
+    events: input.events,
+    recentEventCount: input.maxEvents,
+    maxCharacters: input.maxCharacters,
+  }).text;
 }
 
-function formatEvent(event: SessionEvent): string[] {
-  switch (event.type) {
-    case "user_message": {
-      const payload = event.payload as { content?: unknown };
+export function buildAgentSystemContext(input: {
+  workspaceRoot: string;
+  cwd?: string;
+  now?: Date;
+}): string[] {
+  const cwd = resolve(input.cwd ?? input.workspaceRoot);
+  const workspaceRoot = resolve(input.workspaceRoot);
+  const now = input.now ?? new Date();
 
-      return typeof payload.content === "string"
-        ? [`User: ${truncateTail(payload.content, 2_000)}`]
-        : [];
-    }
-    case "assistant_message": {
-      const payload = event.payload as { content?: unknown };
+  return [
+    buildEnvironmentContext({ cwd, workspaceRoot, now }),
+    ...loadProjectInstructions({ cwd, workspaceRoot }),
+  ];
+}
 
-      return typeof payload.content === "string"
-        ? [`Assistant: ${truncateTail(payload.content, 2_000)}`]
-        : [];
-    }
-    case "summary": {
-      const payload = event.payload as { text?: unknown };
+function buildEnvironmentContext(input: { cwd: string; workspaceRoot: string; now: Date }): string {
+  return [
+    "<env>",
+    `  Working directory: ${input.cwd}`,
+    `  Workspace root folder: ${input.workspaceRoot}`,
+    `  Is directory a git repo: ${isGitRepository(input.workspaceRoot) ? "yes" : "no"}`,
+    `  Platform: ${process.platform}`,
+    `  Today's date: ${input.now.toDateString()}`,
+    "</env>",
+  ].join("\n");
+}
 
-      return typeof payload.text === "string"
-        ? [`Summary:\n${truncateTail(payload.text, 2_000)}`]
-        : [];
-    }
-    case "verification_result": {
-      const payload = event.payload as { command?: unknown; status?: unknown; stderr?: unknown };
-      const command = typeof payload.command === "string" ? payload.command : "unknown command";
-      const status = typeof payload.status === "string" ? payload.status : "unknown";
-      const stderr = typeof payload.stderr === "string" && payload.stderr.length > 0;
+function loadProjectInstructions(input: { cwd: string; workspaceRoot: string }): string[] {
+  const instructionPath = findProjectInstructionPath(input);
 
-      return [
-        `Verification: ${command}: ${status}${stderr ? `\nstderr:\n${truncateTail(payload.stderr as string, 1_000)}` : ""}`,
-      ];
-    }
-    case "tool_result": {
-      const payload = event.payload as {
-        name?: unknown;
-        ok?: unknown;
-        output?: unknown;
-        error?: unknown;
-      };
-      const name = typeof payload.name === "string" ? payload.name : "tool";
-      const status = payload.ok === true ? "ok" : "failed";
-      const detail =
-        typeof payload.error === "string" && payload.error.length > 0
-          ? payload.error
-          : typeof payload.output === "string"
-            ? payload.output
-            : "";
+  if (!instructionPath) {
+    return [];
+  }
 
-      return [`Tool result: ${name}: ${status}${detail ? `\n${truncateTail(detail, 1_000)}` : ""}`];
-    }
-    case "proposed_patch": {
-      const payload = event.payload as { summary?: unknown };
-
-      return typeof payload.summary === "string" ? [`Proposed patch: ${payload.summary}`] : [];
-    }
-    default:
-      return [];
+  try {
+    return [
+      `Instructions from: ${instructionPath}\n${readFileSync(instructionPath, "utf8").trim()}`,
+    ];
+  } catch {
+    return [];
   }
 }
 
-function truncateHead(value: string, maxCharacters: number): string {
-  if (value.length <= maxCharacters) {
-    return value;
+function findProjectInstructionPath(input: {
+  cwd: string;
+  workspaceRoot: string;
+}): string | undefined {
+  const names = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"];
+  let current = input.cwd;
+
+  while (isWithinOrEqual(current, input.workspaceRoot)) {
+    for (const name of names) {
+      const candidate = join(current, name);
+
+      if (isReadableFile(candidate)) {
+        return candidate;
+      }
+    }
+
+    const parent = dirname(current);
+
+    if (parent === current) {
+      break;
+    }
+
+    current = parent;
   }
 
-  return `[Earlier session context truncated]\n${value.slice(-maxCharacters)}`;
+  return undefined;
 }
 
-function truncateTail(value: string, maxCharacters: number): string {
-  return value.length > maxCharacters ? `${value.slice(0, maxCharacters)}\n[truncated]` : value;
+function isGitRepository(workspaceRoot: string): boolean {
+  let current = workspaceRoot;
+
+  while (true) {
+    if (existsSync(join(current, ".git"))) {
+      return true;
+    }
+
+    const parent = dirname(current);
+
+    if (parent === current) {
+      return false;
+    }
+
+    current = parent;
+  }
+}
+
+function isReadableFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isWithinOrEqual(path: string, ancestor: string): boolean {
+  return path === ancestor || path.startsWith(`${ancestor}/`);
 }
