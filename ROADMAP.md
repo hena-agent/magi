@@ -64,14 +64,14 @@
 - [x] Inject recent saved session history into normal agent turns.
 - [x] Replace hard max-iteration stop with a final text-only response step.
 - [x] Filter empty and command-only legacy sessions from the default session list.
-- [ ] Replace the fixed JSON action loop with an event-driven continuation loop based on pending tool results and queued user input.
-- [ ] Persist typed agent step lifecycle events such as step started, assistant started, step ended, provider error, and interruption.
-- [ ] Move from JSON text actions toward provider-native tool calls through the AI SDK tool interface.
-- [ ] Add durable tool settlement states for pending, running, succeeded, failed, denied, and interrupted tools.
-- [ ] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
-- [ ] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
-- [ ] Add queued and steering input handling while an agent run is active.
-- [ ] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
+- [x] Replace the fixed JSON action loop with an event-driven continuation loop based on pending tool results and queued user input.
+- [x] Persist typed agent step lifecycle events such as step started, assistant started, step ended, provider error, and interruption.
+- [x] Move from JSON text actions toward provider-native tool calls through the AI SDK tool interface.
+- [x] Add durable tool settlement states for pending, running, succeeded, failed, denied, and interrupted tools.
+- [x] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
+- [x] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
+- [x] Add queued and steering input handling while an agent run is active.
+- [~] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
 
 ## Phase 4: Multi-Engine Support
 - [ ] Implement model adapter interface.
