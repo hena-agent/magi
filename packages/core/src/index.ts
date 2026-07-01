@@ -3,6 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { LanguageModel } from "ai";
 
 export { createSessionStore } from "./session.js";
+export { agentActionToToolName, validateAgentAction } from "./agent/actions.js";
+export { parseJsonObjectFromText } from "./agent/json.js";
+export { buildAgentSessionContext } from "./agent/session-context.js";
+export { runAgentTurn } from "./agent/turn.js";
 export * from "./magi/index.js";
 export { createPrimaryModelAdapter } from "./model.js";
 export { createToolCall, getToolPermission, runTool } from "./tools.js";
@@ -14,6 +18,8 @@ export {
 export { summarizeWorkspace } from "./summary.js";
 export { getLatestVerificationFailures, truncateTail } from "./verification-context.js";
 export type { PrimaryModelAdapter } from "./model.js";
+export type { AgentAction, ExecutableAgentAction } from "./agent/actions.js";
+export type { AgentTurnResult, AgentTurnStep } from "./agent/turn.js";
 export type { RevisionContext } from "./revision-context.js";
 export type { Session, SessionEvent, SessionEventType, SessionStore } from "./session.js";
 export type { ChangeSummary } from "./summary.js";
