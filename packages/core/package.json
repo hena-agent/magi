@@ -10,7 +10,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "tsc --project tsconfig.build.json && node -e \"const fs=require('node:fs'); fs.cpSync('src/agent/prompt','dist/agent/prompt',{recursive:true});\"",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
     "test": "vitest run",

@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateText, jsonSchema } from "ai";
+import type { ToolCall, ToolName } from "./tools.js";
 
 type ModelProviderSettings = {
   id: string;
@@ -15,6 +16,30 @@ type ModelAdapterConfig = {
 
 export type PrimaryModelAdapter = {
   generateText(input: { system?: string; prompt: string }): Promise<{ text: string }>;
+  generateStep?(input: {
+    system?: string;
+    messages: ModelMessage[];
+    tools: ModelToolDefinition[];
+    toolChoice?: "auto" | "none";
+  }): Promise<ModelStepResponse>;
+};
+
+export type ModelMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  toolCallId?: string;
+};
+
+export type ModelToolDefinition = {
+  name: ToolName;
+  description: string;
+  inputSchema: unknown;
+};
+
+export type ModelStepResponse = {
+  text: string;
+  toolCalls: ToolCall[];
+  finishReason?: string;
 };
 
 const defaultSystemPrompt =
@@ -65,7 +90,61 @@ export function createPrimaryModelAdapter(config: ModelAdapterConfig): PrimaryMo
         );
       }
     },
+    async generateStep(input) {
+      try {
+        const result = await generateText({
+          model,
+          system: input.system ?? defaultSystemPrompt,
+          prompt: formatModelMessages(input.messages),
+          tools: Object.fromEntries(
+            input.tools.map((toolDefinition) => [
+              toolDefinition.name,
+              {
+                description: toolDefinition.description,
+                inputSchema: jsonSchema(toolDefinition.inputSchema),
+              },
+            ]),
+          ),
+          toolChoice: input.toolChoice ?? "auto",
+        });
+
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls.flatMap((toolCall) => {
+            const name = String(toolCall.toolName);
+
+            return isToolName(name)
+              ? [{ id: toolCall.toolCallId, name, input: toolCall.input }]
+              : [];
+          }),
+          finishReason: result.finishReason,
+        };
+      } catch (error) {
+        throw new Error(
+          `Native tool-call model step failed for provider ${providerConfig.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
   };
+}
+
+function formatModelMessages(messages: ModelMessage[]): string {
+  return messages
+    .map(
+      (message) =>
+        `${message.role}${message.toolCallId ? `(${message.toolCallId})` : ""}: ${message.content}`,
+    )
+    .join("\n\n");
+}
+
+function isToolName(value: string): value is ToolName {
+  return (
+    value === "read" ||
+    value === "glob" ||
+    value === "grep" ||
+    value === "apply_patch" ||
+    value === "bash"
+  );
 }
 
 function isOpenAICompatibleProvider(provider: ModelProviderSettings["provider"]): boolean {
