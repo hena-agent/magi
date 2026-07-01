@@ -18,12 +18,20 @@ export type Session = {
 export type SessionEventType =
   | "user_message"
   | "assistant_message"
+  | "agent_step_started"
+  | "assistant_started"
+  | "agent_step_ended"
+  | "provider_error"
+  | "interruption"
   | "magi_decision_trail"
   | "tool_call"
   | "tool_result"
+  | "tool_settlement"
   | "permission_decision"
   | "proposed_patch"
   | "verification_result"
+  | "context_summary"
+  | "queued_user_input"
   | "summary";
 
 export type SessionEvent = {

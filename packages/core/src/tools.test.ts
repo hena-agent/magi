@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createToolCall, getToolPermission, runTool } from "./tools.js";
+import { createToolCall, createToolSettlement, getToolPermission, runTool } from "./tools.js";
 
 describe("tools", () => {
   it("runs read, glob, and grep tools", async () => {
@@ -34,5 +34,22 @@ describe("tools", () => {
     expect(getToolPermission("read")).toBe("read");
     expect(getToolPermission("apply_patch")).toBe("write");
     expect(getToolPermission("bash")).toBe("shell");
+  });
+
+  it("creates durable settlement records", () => {
+    const call = createToolCall("read", { path: "README.md" });
+    const settlement = createToolSettlement({
+      call,
+      status: "succeeded",
+      result: { id: call.id, name: call.name, ok: true, output: "a".repeat(3_000) },
+    });
+
+    expect(settlement).toMatchObject({
+      toolCallId: call.id,
+      name: "read",
+      status: "succeeded",
+      input: { path: "README.md" },
+    });
+    expect(settlement.outputPreview?.length).toBeLessThan(3_000);
   });
 });

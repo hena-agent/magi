@@ -21,6 +21,26 @@ export type ToolResult = {
   error?: string;
 };
 
+export type ToolSettlementStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "denied"
+  | "interrupted";
+
+export type ToolSettlement = {
+  toolCallId: string;
+  name: ToolName;
+  status: ToolSettlementStatus;
+  input?: unknown;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  outputPreview?: string;
+  error?: string;
+};
+
 type ToolRuntime = {
   workspaceRoot: string;
 };
@@ -42,6 +62,27 @@ export function createToolCall(name: ToolName, input: unknown): ToolCall {
     id: crypto.randomUUID(),
     name,
     input,
+  };
+}
+
+export function createToolSettlement(input: {
+  call: ToolCall;
+  status: ToolSettlementStatus;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  result?: ToolResult;
+}): ToolSettlement {
+  return {
+    toolCallId: input.call.id,
+    name: input.call.name,
+    status: input.status,
+    input: input.call.input,
+    ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }),
+    ...(input.endedAt === undefined ? {} : { endedAt: input.endedAt }),
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    ...(input.result?.output ? { outputPreview: truncateToolPreview(input.result.output) } : {}),
+    ...(input.result?.error === undefined ? {} : { error: input.result.error }),
   };
 }
 
@@ -168,6 +209,10 @@ function createOkResult(call: ToolCall, output: string): ToolResult {
     ok: true,
     output,
   };
+}
+
+function truncateToolPreview(value: string): string {
+  return value.length > 2_000 ? `${value.slice(0, 2_000)}\n[truncated]` : value;
 }
 
 function readObject(
