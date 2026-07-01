@@ -2,20 +2,29 @@ import { loadConfig } from "@magi/config";
 import { runVerificationCommands } from "@magi/harness";
 import {
   buildAgentSessionContext,
+  buildAgentSystemContext,
   buildRevisionContext,
   buildSharedContextHistory,
   createPrimaryModelAdapter,
   createSessionStore,
   createTask,
   createToolCall,
+  createToolSettlement,
   extractFirstDiffBlock,
+  getAgent,
+  getDefaultAgent,
   getLatestProposedPatch,
   getToolPermission,
+  listAgents,
+  mergeAgentPermission,
+  planSessionMaintenance,
   runAgentTurn,
   runTool,
   selectReviewLenses,
   summarizeWorkspace,
   type ExecutableAgentAction,
+  type AgentTurnEvent,
+  type AgentInfo,
   type Session,
   type SessionEvent,
   type SessionEventType,
@@ -58,6 +67,15 @@ const shellCommands = [
   "new",
   "rename",
   "history",
+  "agent",
+  "plan",
+  "build",
+  "queue",
+  "clear_queue",
+  "steer",
+  "interrupt",
+  "maintain_sessions",
+  "session_cleanup_candidates",
   "help",
 ];
 
@@ -76,7 +94,11 @@ export function App() {
   const [store] = useState(() => createSessionStore({ workspaceRoot: config.workspaceRoot }));
   const [initialSession] = useState<InitialSessionState>(() => createInitialSession(store, config));
   const draftEventsRef = useRef<DraftSessionEvent[]>([]);
+  const queuedPromptsRef = useRef<string[]>([]);
+  const steeringInputsRef = useRef<string[]>([]);
+  const interruptionRequestedRef = useRef(false);
   const [session, setSession] = useState<Session | undefined>(initialSession.session);
+  const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => getDefaultAgent());
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [
     {
@@ -148,13 +170,22 @@ export function App() {
       return;
     }
 
-    const userEvent = appendSessionEvent({
-      type: "user_message",
-      payload: { content },
-    });
-    addMessage(`User: ${content}`, `${userEvent.id}-user`);
+    if (isBusy) {
+      queuedPromptsRef.current = [...queuedPromptsRef.current, content];
+      appendSessionEvent({
+        type: "queued_user_input",
+        payload: {
+          content,
+          agentId: activeAgent.id,
+          mode: "queued",
+          queuedAt: new Date().toISOString(),
+        },
+      });
+      addMessage(`Queued prompt #${queuedPromptsRef.current.length}: ${truncateOneLine(content)}`);
+      return;
+    }
 
-    await runSingleEngineAgentTurn(content);
+    await submitAgentPrompt(content, activeAgent);
   }
 
   async function handleCommand(content: string): Promise<void> {
@@ -244,6 +275,59 @@ export function App() {
       return;
     }
 
+    if (command === "agent") {
+      switchAgent(args.join(" ").trim());
+      return;
+    }
+
+    if (command === "plan") {
+      await switchAgentAndMaybeRun("plan", args.join(" ").trim());
+      return;
+    }
+
+    if (command === "build") {
+      await switchAgentAndMaybeRun("build", args.join(" ").trim());
+      return;
+    }
+
+    if (command === "queue") {
+      showQueuedPrompts();
+      return;
+    }
+
+    if (command === "clear_queue") {
+      queuedPromptsRef.current = [];
+      addMessage("Cleared queued prompts.");
+      return;
+    }
+
+    if (command === "steer") {
+      addSteeringInput(args.join(" ").trim());
+      return;
+    }
+
+    if (command === "interrupt") {
+      interruptionRequestedRef.current = true;
+      appendSessionEvent({
+        type: "interruption",
+        payload: { reason: "user_cancelled", createdAt: new Date().toISOString() },
+      });
+      addMessage(
+        "Interruption requested. Current provider/tool calls cannot be forcibly aborted yet; the run will stop at the next safe point.",
+      );
+      return;
+    }
+
+    if (command === "maintain_sessions") {
+      maintainRecentSessions();
+      return;
+    }
+
+    if (command === "session_cleanup_candidates") {
+      showSessionCleanupCandidates();
+      return;
+    }
+
     if (command === "magi_preview") {
       if (
         !requirePersistedSession(
@@ -275,26 +359,56 @@ export function App() {
     await runToolWithPermission(call);
   }
 
-  async function runSingleEngineAgentTurn(content: string): Promise<void> {
+  async function submitAgentPrompt(content: string, agent: AgentInfo): Promise<void> {
+    const userEvent = appendSessionEvent({
+      type: "user_message",
+      payload: { content, agentId: agent.id },
+    });
+    addMessage(`User: ${content}`, `${userEvent.id}-user`);
+
+    await runSingleEngineAgentTurn(content, agent);
+  }
+
+  async function runSingleEngineAgentTurn(content: string, agent: AgentInfo): Promise<void> {
     beginBusy();
+    interruptionRequestedRef.current = false;
 
     try {
       const adapter = createPrimaryModelAdapter(config);
+      const steeringInputs = steeringInputsRef.current;
+      steeringInputsRef.current = [];
+      const effectiveContent =
+        steeringInputs.length === 0
+          ? content
+          : `${content}\n\nSteering input for this run:\n${steeringInputs.map((input) => `- ${input}`).join("\n")}`;
       const sessionContext = buildAgentSessionContext({
         events: getCurrentSessionEvents().slice(0, -1),
       });
+      const systemContext = buildAgentSystemContext({ workspaceRoot: config.workspaceRoot });
       const result = await runAgentTurn({
         engine: adapter,
-        userMessage: content,
+        agent,
+        userMessage: effectiveContent,
+        systemContext,
         sessionContext,
-        maxIterations: config.agent.maxIterations,
+        shouldInterrupt() {
+          return interruptionRequestedRef.current;
+        },
+        onEvent(event) {
+          appendAgentTurnEvent(event, agent);
+        },
         async executeAction(action) {
-          return await executeAgentAction(action);
+          return await executeAgentAction(action, agent);
         },
       });
       const event = appendSessionEvent({
         type: "assistant_message",
-        payload: { content: result.finalText, agentTurn: true, status: result.status },
+        payload: {
+          content: result.finalText,
+          agentId: agent.id,
+          agentTurn: true,
+          status: result.status,
+        },
       });
       persistDraftSessionIfNeeded(content, result.finalText);
       addMessage(`Assistant: ${truncate(result.finalText)}`, event.id);
@@ -305,24 +419,29 @@ export function App() {
       addMessage(`Agent error: ${formatError(error)}`);
     } finally {
       endBusy();
+      void drainQueuedPrompts();
     }
   }
 
-  async function executeAgentAction(action: ExecutableAgentAction): Promise<string> {
+  async function executeAgentAction(
+    action: ExecutableAgentAction,
+    agent: AgentInfo,
+  ): Promise<string> {
     switch (action.type) {
       case "read":
-        return await executeToolAction(createToolCall("read", { path: action.path }));
+        return await executeToolAction(createToolCall("read", { path: action.path }), agent);
       case "glob":
-        return await executeToolAction(createToolCall("glob", { pattern: action.pattern }));
+        return await executeToolAction(createToolCall("glob", { pattern: action.pattern }), agent);
       case "grep":
         return await executeToolAction(
           createToolCall("grep", {
             pattern: action.pattern,
             ...(action.include === undefined ? {} : { include: action.include }),
           }),
+          agent,
         );
       case "verify":
-        return await runVerification(action.command ?? "");
+        return await runVerification(action.command ?? "", agent);
       case "propose_patch": {
         const event = appendSessionEvent({
           type: "proposed_patch",
@@ -331,13 +450,19 @@ export function App() {
         addMessage(
           `Proposed patch saved as event #${event.sequence}. Requesting write approval...`,
         );
-        return await executeToolAction(createToolCall("apply_patch", { patch: action.patch }));
+        return await executeToolAction(
+          createToolCall("apply_patch", { patch: action.patch }),
+          agent,
+        );
       }
     }
   }
 
-  async function executeToolAction(call: ToolCall): Promise<string> {
-    const result = await runToolWithPermission(call);
+  async function executeToolAction(
+    call: ToolCall,
+    agent: AgentInfo = activeAgent,
+  ): Promise<string> {
+    const result = await runToolWithPermission(call, agent);
 
     if (!result) {
       return `${call.name} did not run.`;
@@ -346,14 +471,32 @@ export function App() {
     return result.ok ? result.output || "ok" : `failed: ${result.error}`;
   }
 
-  async function runToolWithPermission(call: ToolCall): Promise<ToolResult | undefined> {
+  async function runToolWithPermission(
+    call: ToolCall,
+    agent: AgentInfo = activeAgent,
+  ): Promise<ToolResult | undefined> {
     const permission = getToolPermission(call.name);
-    const policy = config.permissions[permission];
+    const policy = mergeAgentPermission(agent, config.permissions)[permission];
+    appendSessionEvent({
+      type: "tool_settlement",
+      payload: { ...createToolSettlement({ call, status: "pending" }), agentId: agent.id },
+    });
 
     if (policy === "deny") {
       appendSessionEvent({
         type: "permission_decision",
         payload: { toolCallId: call.id, action: permission, decision: "deny" },
+      });
+      appendSessionEvent({
+        type: "tool_settlement",
+        payload: {
+          ...createToolSettlement({
+            call,
+            status: "denied",
+            endedAt: new Date().toISOString(),
+          }),
+          agentId: agent.id,
+        },
       });
       addMessage(`Denied by config: ${call.name}`);
       return;
@@ -376,12 +519,23 @@ export function App() {
       setPendingPermission(undefined);
 
       if (!allow) {
+        appendSessionEvent({
+          type: "tool_settlement",
+          payload: {
+            ...createToolSettlement({
+              call,
+              status: "denied",
+              endedAt: new Date().toISOString(),
+            }),
+            agentId: agent.id,
+          },
+        });
         addMessage(`Denied: ${call.name}`);
         return;
       }
     }
 
-    return await executeToolCall(call);
+    return await executeToolCall(call, agent);
   }
 
   function resolvePermission(allow: boolean): void {
@@ -392,13 +546,39 @@ export function App() {
     pendingPermission.resolve(allow);
   }
 
-  async function executeToolCall(call: ToolCall): Promise<ToolResult> {
+  async function executeToolCall(
+    call: ToolCall,
+    agent: AgentInfo = activeAgent,
+  ): Promise<ToolResult> {
     beginBusy();
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
     appendSessionEvent({ type: "tool_call", payload: call });
+    appendSessionEvent({
+      type: "tool_settlement",
+      payload: {
+        ...createToolSettlement({ call, status: "running", startedAt }),
+        agentId: agent.id,
+      },
+    });
 
     try {
       const result = await runTool(call, { workspaceRoot: config.workspaceRoot });
       appendSessionEvent({ type: "tool_result", payload: result });
+      appendSessionEvent({
+        type: "tool_settlement",
+        payload: {
+          ...createToolSettlement({
+            call,
+            status: result.ok ? "succeeded" : "failed",
+            startedAt,
+            endedAt: new Date().toISOString(),
+            durationMs: Date.now() - startedAtMs,
+            result,
+          }),
+          agentId: agent.id,
+        },
+      });
       addMessage(
         `${call.name}: ${result.ok ? truncate(result.output || "ok") : `failed: ${result.error}`}`,
       );
@@ -408,7 +588,13 @@ export function App() {
     }
   }
 
-  async function runVerification(command: string): Promise<string> {
+  async function runVerification(command: string, agent: AgentInfo = activeAgent): Promise<string> {
+    if (mergeAgentPermission(agent, config.permissions).shell === "deny") {
+      const message = `${agent.id} agent cannot run verification because shell permission is denied.`;
+      addMessage(message);
+      return message;
+    }
+
     beginBusy();
 
     try {
@@ -418,7 +604,10 @@ export function App() {
       });
 
       for (const result of results) {
-        appendSessionEvent({ type: "verification_result", payload: result });
+        appendSessionEvent({
+          type: "verification_result",
+          payload: { ...result, agentId: agent.id },
+        });
         addMessage(`verify: ${result.command}: ${result.status}`);
       }
 
@@ -682,6 +871,168 @@ export function App() {
     );
   }
 
+  async function switchAgentAndMaybeRun(agentId: string, content: string): Promise<void> {
+    const agent = switchAgent(agentId);
+
+    if (!agent || content.length === 0) {
+      return;
+    }
+
+    await submitAgentPrompt(content, agent);
+  }
+
+  function switchAgent(agentId: string): AgentInfo | undefined {
+    if (agentId.length === 0) {
+      addMessage(
+        [
+          `Active agent: ${activeAgent.id}`,
+          "Available agents:",
+          ...listAgents().map(
+            (agent) =>
+              `${agent.id === activeAgent.id ? "*" : "-"} ${agent.id} (${agent.mode}) - ${agent.description}`,
+          ),
+        ].join("\n"),
+      );
+      return undefined;
+    }
+
+    if (isBusy || pendingPermission) {
+      addMessage("Cannot switch agents while a command is running or waiting for permission.");
+      return undefined;
+    }
+
+    const agent = getAgent(agentId);
+
+    if (!agent || agent.hidden || agent.mode !== "primary") {
+      addMessage(`Agent not available: ${agentId}`);
+      return undefined;
+    }
+
+    setActiveAgent(agent);
+    appendSessionEvent({
+      type: "summary",
+      payload: { text: `Switched agent to ${agent.id}.`, agentSwitch: true, agentId: agent.id },
+    });
+    addMessage(`Switched agent: ${agent.id}`);
+    return agent;
+  }
+
+  function showQueuedPrompts(): void {
+    if (queuedPromptsRef.current.length === 0) {
+      addMessage("No queued prompts.");
+      return;
+    }
+
+    addMessage(
+      [
+        `Queued prompts (${queuedPromptsRef.current.length}):`,
+        ...queuedPromptsRef.current.map(
+          (queuedPrompt, index) => `${index + 1}. ${truncateOneLine(queuedPrompt)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  function maintainRecentSessions(): void {
+    const recentSessions = store.listSessions({ workspaceRoot: config.workspaceRoot, limit: 50 });
+    const actions: string[] = [];
+
+    for (const listedSession of recentSessions) {
+      const events = store.listEvents(listedSession.id);
+      const plan = planSessionMaintenance({ session: listedSession, events });
+
+      if (plan.titleCandidate !== undefined) {
+        store.updateSession({ sessionId: listedSession.id, title: plan.titleCandidate });
+        actions.push(`title: ${listedSession.id}: ${plan.titleCandidate}`);
+      }
+
+      if (plan.summaryCandidate !== undefined) {
+        store.appendEvent({
+          sessionId: listedSession.id,
+          type: "context_summary",
+          payload: { text: plan.summaryCandidate, source: "maintenance" },
+        });
+        actions.push(`summary: ${listedSession.id}`);
+      }
+    }
+
+    addMessage(
+      actions.length === 0 ? "No session maintenance actions needed." : actions.join("\n"),
+    );
+  }
+
+  function showSessionCleanupCandidates(): void {
+    const candidates = store
+      .listSessions({ workspaceRoot: config.workspaceRoot, limit: 50 })
+      .map((listedSession) => ({
+        session: listedSession,
+        plan: planSessionMaintenance({
+          session: listedSession,
+          events: store.listEvents(listedSession.id),
+        }),
+      }))
+      .filter(({ plan }) => plan.cleanupCandidate);
+
+    if (candidates.length === 0) {
+      addMessage("No cleanup candidates found.");
+      return;
+    }
+
+    addMessage(
+      [
+        "Cleanup candidates (not deleted automatically):",
+        ...candidates.map(
+          ({ session: candidateSession, plan }) =>
+            `${candidateSession.id}: ${plan.cleanupReason ?? "cleanup candidate"}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  function addSteeringInput(content: string): void {
+    if (content.length === 0) {
+      addMessage("Usage: /steer <message>");
+      return;
+    }
+
+    steeringInputsRef.current = [...steeringInputsRef.current, content];
+    appendSessionEvent({
+      type: "queued_user_input",
+      payload: {
+        content,
+        agentId: activeAgent.id,
+        mode: "steering",
+        queuedAt: new Date().toISOString(),
+      },
+    });
+    addMessage(`Steering input queued: ${truncateOneLine(content)}`);
+  }
+
+  async function drainQueuedPrompts(): Promise<void> {
+    if (queuedPromptsRef.current.length === 0 || busyDepth > 1 || pendingPermission) {
+      return;
+    }
+
+    const [nextPrompt, ...remainingPrompts] = queuedPromptsRef.current;
+    queuedPromptsRef.current = remainingPrompts;
+
+    if (nextPrompt !== undefined) {
+      const userEvent = appendSessionEvent({
+        type: "user_message",
+        payload: { content: nextPrompt, agentId: activeAgent.id, source: "queued" },
+      });
+      addMessage(`User: ${nextPrompt}`, `${userEvent.id}-user`);
+      await runSingleEngineAgentTurn(nextPrompt, activeAgent);
+    }
+  }
+
+  function appendAgentTurnEvent(event: AgentTurnEvent, agent: AgentInfo): void {
+    appendSessionEvent({
+      type: event.type,
+      payload: { ...event.payload, agentId: agent.id },
+    });
+  }
+
   function getSessionDisplayTitle(listedSession: Session, events: SessionEvent[]): string {
     if (listedSession.title !== undefined && listedSession.title !== defaultSessionTitle) {
       return listedSession.title;
@@ -810,6 +1161,7 @@ export function App() {
         MAGI
       </Text>
       <Text>Mode: {task.mode}</Text>
+      <Text>Agent: {activeAgent.id}</Text>
       <Text>Risk: {task.riskLevel}</Text>
       <Text>Workspace: {config.workspaceRoot}</Text>
       <Text>Session: {session?.id ?? "draft"}</Text>
@@ -919,6 +1271,13 @@ function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): 
           ? [{ id: event.id, content: `verify: ${payload.command}: ${payload.status}` }]
           : [];
       }
+      case "tool_settlement": {
+        const payload = event.payload as { name?: unknown; status?: unknown };
+        const name = typeof payload.name === "string" ? payload.name : "tool";
+        const status = typeof payload.status === "string" ? payload.status : "unknown";
+
+        return [{ id: event.id, content: `${name}: ${status}` }];
+      }
       case "summary": {
         const payload = event.payload as { text?: unknown };
 
@@ -952,6 +1311,44 @@ function formatEventPayload(event: SessionEvent): string {
       const name = typeof payload.name === "string" ? payload.name : "tool";
 
       return `${name}: ${payload.ok === true ? "ok" : "failed"}${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
+    }
+    case "tool_settlement": {
+      const payload = event.payload as { name?: unknown; status?: unknown; error?: unknown };
+      const name = typeof payload.name === "string" ? payload.name : "tool";
+      const status = typeof payload.status === "string" ? payload.status : "unknown";
+
+      return `${name}: ${status}${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
+    }
+    case "agent_step_started": {
+      const payload = event.payload as { reason?: unknown };
+
+      return `step started: ${String(payload.reason ?? "unknown")}`;
+    }
+    case "assistant_started":
+      return "assistant started";
+    case "agent_step_ended": {
+      const payload = event.payload as { status?: unknown };
+
+      return `step ended: ${String(payload.status ?? "unknown")}`;
+    }
+    case "provider_error": {
+      const payload = event.payload as { message?: unknown };
+
+      return typeof payload.message === "string"
+        ? truncateOneLine(payload.message)
+        : "provider error";
+    }
+    case "interruption": {
+      const payload = event.payload as { reason?: unknown };
+
+      return `interrupted: ${String(payload.reason ?? "unknown")}`;
+    }
+    case "context_summary":
+      return "context summary";
+    case "queued_user_input": {
+      const payload = event.payload as { content?: unknown; mode?: unknown };
+
+      return `${String(payload.mode ?? "queued")}: ${typeof payload.content === "string" ? truncateOneLine(payload.content) : "input"}`;
     }
     case "verification_result": {
       const payload = event.payload as { command?: unknown; status?: unknown };
