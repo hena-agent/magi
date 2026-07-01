@@ -28,4 +28,43 @@ describe("createPrimaryModelAdapter", () => {
       }),
     ).toThrow(/Missing MAGI_TEST_MISSING_KEY/);
   });
+
+  it("creates a DeepSeek adapter as an OpenAI-compatible provider", () => {
+    process.env.MAGI_TEST_DEEPSEEK_KEY = "test-key";
+
+    expect(() =>
+      createPrimaryModelAdapter({
+        modelProviders: [
+          {
+            id: "primary",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            apiKeyEnv: "MAGI_TEST_DEEPSEEK_KEY",
+          },
+        ],
+      }),
+    ).not.toThrow();
+
+    delete process.env.MAGI_TEST_DEEPSEEK_KEY;
+  });
+
+  it("creates a custom OpenAI-compatible adapter", () => {
+    process.env.MAGI_TEST_CUSTOM_KEY = "test-key";
+
+    expect(() =>
+      createPrimaryModelAdapter({
+        modelProviders: [
+          {
+            id: "primary",
+            provider: "custom",
+            model: "custom-model",
+            apiKeyEnv: "MAGI_TEST_CUSTOM_KEY",
+            baseUrl: "https://example.com/v1",
+          },
+        ],
+      }),
+    ).not.toThrow();
+
+    delete process.env.MAGI_TEST_CUSTOM_KEY;
+  });
 });
