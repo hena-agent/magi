@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { asc, eq, max } from "drizzle-orm";
+import { asc, desc, eq, max } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdirSync } from "node:fs";
@@ -43,6 +43,10 @@ type CreateSessionStoreOptions = {
 
 export type SessionStore = {
   createSession(input?: { title?: string }): Session;
+  getSession(sessionId: string): Session | undefined;
+  getLatestSession(input?: { workspaceRoot?: string }): Session | undefined;
+  listSessions(input?: { workspaceRoot?: string; limit?: number }): Session[];
+  updateSession(input: { sessionId: string; title?: string }): Session;
   appendEvent(input: { sessionId: string; type: SessionEventType; payload: unknown }): SessionEvent;
   listEvents(sessionId: string): SessionEvent[];
   close(): void;
@@ -58,11 +62,12 @@ export function createSessionStore(options: CreateSessionStoreOptions): SessionS
   sqlite.pragma("foreign_keys = ON");
 
   const db = drizzle(sqlite);
+  let lastTimestampMs = 0;
   migrate(db, { migrationsFolder: options.migrationsFolder ?? defaultMigrationsFolder });
 
   return {
     createSession(input = {}) {
-      const timestamp = new Date().toISOString();
+      const timestamp = nextTimestamp();
       const session = {
         id: crypto.randomUUID(),
         workspaceRoot: options.workspaceRoot,
@@ -83,8 +88,55 @@ export function createSessionStore(options: CreateSessionStoreOptions): SessionS
 
       return session;
     },
+    getSession(sessionId) {
+      const [row] = db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+
+      return row === undefined ? undefined : sessionFromRow(row);
+    },
+    getLatestSession(input = {}) {
+      const [session] = this.listSessions({ workspaceRoot: input.workspaceRoot, limit: 1 });
+
+      return session;
+    },
+    listSessions(input = {}) {
+      const limit = input.limit ?? 20;
+      const where =
+        input.workspaceRoot === undefined
+          ? undefined
+          : eq(sessions.workspaceRoot, input.workspaceRoot);
+      const rows =
+        where === undefined
+          ? db.select().from(sessions).orderBy(desc(sessions.updatedAt)).limit(limit).all()
+          : db
+              .select()
+              .from(sessions)
+              .where(where)
+              .orderBy(desc(sessions.updatedAt))
+              .limit(limit)
+              .all();
+
+      return rows.map(sessionFromRow);
+    },
+    updateSession(input) {
+      const timestamp = nextTimestamp();
+      db.update(sessions)
+        .set({
+          ...(input.title === undefined ? {} : { title: input.title }),
+          updatedAt: timestamp,
+        })
+        .where(eq(sessions.id, input.sessionId))
+        .run();
+
+      const session = this.getSession(input.sessionId);
+
+      if (!session) {
+        throw new Error(`Session not found: ${input.sessionId}`);
+      }
+
+      return session;
+    },
     appendEvent(input) {
-      const timestamp = new Date().toISOString();
+      const timestamp = nextTimestamp();
       const nextSequence = getNextEventSequence(input.sessionId);
       const event = {
         id: crypto.randomUUID(),
@@ -143,4 +195,21 @@ export function createSessionStore(options: CreateSessionStoreOptions): SessionS
 
     return (row?.sequence ?? 0) + 1;
   }
+
+  function nextTimestamp(): string {
+    const now = Date.now();
+    lastTimestampMs = Math.max(now, lastTimestampMs + 1);
+
+    return new Date(lastTimestampMs).toISOString();
+  }
+}
+
+function sessionFromRow(row: typeof sessions.$inferSelect): Session {
+  return {
+    id: row.id,
+    workspaceRoot: row.workspaceRoot,
+    ...(row.title === null ? {} : { title: row.title }),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }
