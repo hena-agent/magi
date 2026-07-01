@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 
 export type ModelProviderConfig = {
   id: string;
-  provider: "openai" | "anthropic" | "google" | "custom";
+  provider: "openai" | "deepseek" | "anthropic" | "google" | "custom";
   model: string;
   apiKeyEnv?: string;
   baseUrl?: string;
@@ -18,11 +18,21 @@ export type PermissionConfig = {
   network: PermissionPolicy;
 };
 
+export type AgentConfig = {
+  maxIterations: number;
+};
+
+export type SessionConfig = {
+  startup: "new" | "resume";
+};
+
 export type MagiConfig = {
   workspaceRoot: string;
   modelProviders: ModelProviderConfig[];
   permissions: PermissionConfig;
   verificationCommands: string[];
+  agent: AgentConfig;
+  session: SessionConfig;
 };
 
 export type LoadConfigOptions = {
@@ -34,6 +44,8 @@ type RawMagiConfig = {
   modelProviders?: ModelProviderConfig[];
   permissions?: Partial<PermissionConfig>;
   verificationCommands?: string[];
+  agent?: Partial<AgentConfig>;
+  session?: Partial<SessionConfig>;
 };
 
 const configFileNames = ["magi.config.json", ".magi/config.json"];
@@ -45,6 +57,14 @@ const defaultPermissions: PermissionConfig = {
   network: "prompt",
 };
 
+const defaultAgent: AgentConfig = {
+  maxIterations: 30,
+};
+
+const defaultSession: SessionConfig = {
+  startup: "new",
+};
+
 export function getDefaultConfig(): MagiConfig {
   const workspaceRoot = findWorkspaceRoot(process.env.INIT_CWD ?? process.cwd());
 
@@ -53,6 +73,8 @@ export function getDefaultConfig(): MagiConfig {
     modelProviders: [],
     permissions: defaultPermissions,
     verificationCommands: ["pnpm typecheck", "pnpm test", "pnpm lint", "pnpm knip"],
+    agent: defaultAgent,
+    session: defaultSession,
   };
 }
 
@@ -78,6 +100,14 @@ export function loadConfig(options: LoadConfigOptions = {}): MagiConfig {
       ...rawConfig.permissions,
     },
     verificationCommands: rawConfig.verificationCommands ?? baseConfig.verificationCommands,
+    agent: {
+      ...baseConfig.agent,
+      ...rawConfig.agent,
+    },
+    session: {
+      ...baseConfig.session,
+      ...rawConfig.session,
+    },
   };
 }
 
@@ -108,7 +138,53 @@ function parseConfigFile(configPath: string): RawMagiConfig {
       "verificationCommands",
       configPath,
     ),
+    agent: readAgentConfig(parsedConfig.agent, configPath),
+    session: readSessionConfig(parsedConfig.session, configPath),
   };
+}
+
+function readAgentConfig(value: unknown, configPath: string): Partial<AgentConfig> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isObject(value)) {
+    throw new Error(`agent must be an object: ${configPath}`);
+  }
+
+  const maxIterations = value.maxIterations;
+
+  if (maxIterations === undefined) {
+    return undefined;
+  }
+
+  if (typeof maxIterations !== "number" || !Number.isInteger(maxIterations) || maxIterations < 1) {
+    throw new Error(`agent.maxIterations must be a positive integer: ${configPath}`);
+  }
+
+  return { maxIterations };
+}
+
+function readSessionConfig(value: unknown, configPath: string): Partial<SessionConfig> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isObject(value)) {
+    throw new Error(`session must be an object: ${configPath}`);
+  }
+
+  const startup = value.startup;
+
+  if (startup === undefined) {
+    return undefined;
+  }
+
+  if (startup !== "new" && startup !== "resume") {
+    throw new Error(`session.startup must be new or resume: ${configPath}`);
+  }
+
+  return { startup };
 }
 
 function readModelProviders(value: unknown, configPath: string): ModelProviderConfig[] | undefined {
@@ -209,7 +285,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isProvider(value: unknown): value is ModelProviderConfig["provider"] {
-  return value === "openai" || value === "anthropic" || value === "google" || value === "custom";
+  return (
+    value === "openai" ||
+    value === "deepseek" ||
+    value === "anthropic" ||
+    value === "google" ||
+    value === "custom"
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {

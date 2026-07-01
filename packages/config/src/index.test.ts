@@ -23,6 +23,8 @@ describe("loadConfig", () => {
       "pnpm lint",
       "pnpm knip",
     ]);
+    expect(config.agent).toEqual({ maxIterations: 30 });
+    expect(config.session).toEqual({ startup: "new" });
   });
 
   it("loads model providers, permissions, and verification commands", () => {
@@ -43,6 +45,8 @@ describe("loadConfig", () => {
           write: "allow",
         },
         verificationCommands: ["pnpm test"],
+        agent: { maxIterations: 42 },
+        session: { startup: "resume" },
       }),
     );
 
@@ -63,6 +67,34 @@ describe("loadConfig", () => {
       network: "prompt",
     });
     expect(config.verificationCommands).toEqual(["pnpm test"]);
+    expect(config.agent).toEqual({ maxIterations: 42 });
+    expect(config.session).toEqual({ startup: "resume" });
+  });
+
+  it("accepts DeepSeek provider config", () => {
+    const workspaceRoot = createWorkspace();
+    writeFileSync(
+      join(workspaceRoot, "magi.config.json"),
+      JSON.stringify({
+        modelProviders: [
+          {
+            id: "primary",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            apiKeyEnv: "DEEPSEEK_API_KEY",
+          },
+        ],
+      }),
+    );
+
+    expect(loadConfig({ cwd: workspaceRoot }).modelProviders).toEqual([
+      {
+        id: "primary",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+      },
+    ]);
   });
 
   it("loads .magi/config.json", () => {
@@ -84,6 +116,26 @@ describe("loadConfig", () => {
     );
 
     expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/permissions\.shell/);
+  });
+
+  it("rejects invalid agent config values", () => {
+    const workspaceRoot = createWorkspace();
+    writeFileSync(
+      join(workspaceRoot, "magi.config.json"),
+      JSON.stringify({ agent: { maxIterations: 0 } }),
+    );
+
+    expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/agent\.maxIterations/);
+  });
+
+  it("rejects invalid session config values", () => {
+    const workspaceRoot = createWorkspace();
+    writeFileSync(
+      join(workspaceRoot, "magi.config.json"),
+      JSON.stringify({ session: { startup: "latest" } }),
+    );
+
+    expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/session\.startup/);
   });
 });
 
