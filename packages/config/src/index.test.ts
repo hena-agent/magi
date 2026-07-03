@@ -97,6 +97,51 @@ describe("loadConfig", () => {
     ]);
   });
 
+  it("accepts OpenAI OAuth provider config without apiKeyEnv", () => {
+    const workspaceRoot = createWorkspace();
+    writeFileSync(
+      join(workspaceRoot, "magi.config.json"),
+      JSON.stringify({
+        modelProviders: [
+          {
+            id: "openai",
+            provider: "openai",
+            model: "gpt-5.5",
+            auth: { type: "oauth" },
+          },
+        ],
+      }),
+    );
+
+    expect(loadConfig({ cwd: workspaceRoot }).modelProviders).toEqual([
+      {
+        id: "openai",
+        provider: "openai",
+        model: "gpt-5.5",
+        auth: { type: "oauth" },
+      },
+    ]);
+  });
+
+  it("rejects OAuth for non-OpenAI providers", () => {
+    const workspaceRoot = createWorkspace();
+    writeFileSync(
+      join(workspaceRoot, "magi.config.json"),
+      JSON.stringify({
+        modelProviders: [
+          {
+            id: "custom",
+            provider: "custom",
+            model: "model",
+            auth: { type: "oauth" },
+          },
+        ],
+      }),
+    );
+
+    expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/oauth is only supported for openai/);
+  });
+
   it("loads .magi/config.json", () => {
     const workspaceRoot = createWorkspace();
     mkdirSync(join(workspaceRoot, ".magi"));

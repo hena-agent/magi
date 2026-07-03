@@ -7,6 +7,11 @@ export type ModelProviderConfig = {
   model: string;
   apiKeyEnv?: string;
   baseUrl?: string;
+  auth?: ModelProviderAuthConfig;
+};
+
+export type ModelProviderAuthConfig = {
+  type: "oauth";
 };
 
 export type PermissionPolicy = "allow" | "prompt" | "deny";
@@ -201,7 +206,7 @@ function readModelProviders(value: unknown, configPath: string): ModelProviderCo
       throw new Error(`modelProviders[${index}] must be an object: ${configPath}`);
     }
 
-    const { id, provider, model, apiKeyEnv, baseUrl } = providerConfig;
+    const { id, provider, model, apiKeyEnv, baseUrl, auth } = providerConfig;
 
     if (!isNonEmptyString(id) || !isProvider(provider) || !isNonEmptyString(model)) {
       throw new Error(
@@ -217,14 +222,43 @@ function readModelProviders(value: unknown, configPath: string): ModelProviderCo
       throw new Error(`modelProviders[${index}].baseUrl must be a string: ${configPath}`);
     }
 
+    const parsedAuth = readModelProviderAuth(auth, `modelProviders[${index}].auth`, configPath);
+
+    if (parsedAuth?.type === "oauth" && provider !== "openai") {
+      throw new Error(
+        `modelProviders[${index}].auth.type oauth is only supported for openai: ${configPath}`,
+      );
+    }
+
     return {
       id,
       provider,
       model,
       ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
       ...(baseUrl === undefined ? {} : { baseUrl }),
+      ...(parsedAuth === undefined ? {} : { auth: parsedAuth }),
     };
   });
+}
+
+function readModelProviderAuth(
+  value: unknown,
+  path: string,
+  configPath: string,
+): ModelProviderAuthConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isObject(value)) {
+    throw new Error(`${path} must be an object: ${configPath}`);
+  }
+
+  if (value.type !== "oauth") {
+    throw new Error(`${path}.type must be oauth: ${configPath}`);
+  }
+
+  return { type: "oauth" };
 }
 
 function readPermissions(
