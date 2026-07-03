@@ -5,6 +5,15 @@ import type { LanguageModel } from "ai";
 export { createSessionStore } from "./session.js";
 export { agentActionToToolName, validateAgentAction } from "./agent/actions.js";
 export { parseJsonObjectFromText } from "./agent/json.js";
+export {
+  getAuth,
+  getAuthFilePath,
+  isOAuthAuth,
+  loadAuthStore,
+  OAUTH_DUMMY_KEY,
+  removeAuth,
+  setAuth,
+} from "./auth.js";
 export { buildAgentSessionContext, buildAgentSystemContext } from "./agent/session-context.js";
 export { compactSessionContext } from "./agent/context-compaction.js";
 export {
@@ -28,6 +37,24 @@ export { runAgentTurn } from "./agent/turn.js";
 export { getAgentRunContinuation, runEventDrivenAgent } from "./agent/runner.js";
 export * from "./magi/index.js";
 export { createPrimaryModelAdapter } from "./model.js";
+export { builtinModelProviders, listEffectiveModelProviders } from "./model-catalog.js";
+export {
+  getDefaultModelSelection,
+  getEffectiveModelProviderSummaries,
+  getLatestModelSelection,
+  getModelProvider,
+} from "./model-selection.js";
+export {
+  createOpenAICodexOAuthFetch,
+  isOpenAICodexOAuthModel,
+  loginOpenAICodexBrowser,
+  loginOpenAICodexHeadless,
+  OPENAI_CODEX_API_ENDPOINT,
+  OPENAI_CODEX_CLIENT_ID,
+  OPENAI_CODEX_ISSUER,
+  OPENAI_CODEX_OAUTH_PORT,
+  refreshOpenAICodexAuth,
+} from "./openai-codex-oauth.js";
 export { createToolCall, createToolSettlement, getToolPermission, runTool } from "./tools.js";
 export {
   buildRevisionContext,
@@ -38,11 +65,18 @@ export { summarizeWorkspace } from "./summary.js";
 export { planSessionMaintenance } from "./session-maintenance.js";
 export { getLatestVerificationFailures, truncateTail } from "./verification-context.js";
 export type {
+  EffectiveModelProvider,
+  ModelProviderAuthConfig,
+  ModelProviderSettings,
+} from "./model-catalog.js";
+export type {
   ModelMessage,
   ModelStepResponse,
   ModelToolDefinition,
   PrimaryModelAdapter,
+  SelectedModelProvider,
 } from "./model.js";
+export type { ModelProviderSummary, ModelSelection } from "./model-selection.js";
 export type { AgentAction, ExecutableAgentAction } from "./agent/actions.js";
 export type { AgentTurnEvent, AgentTurnResult, AgentTurnStep } from "./agent/turn.js";
 export type {
@@ -53,6 +87,7 @@ export type {
   AgentRunStep,
 } from "./agent/runner.js";
 export type { CompactSessionContextResult } from "./agent/context-compaction.js";
+export type { ApiAuth, AuthInfo, AuthStore, OAuthAuth, WellKnownAuth } from "./auth.js";
 export type {
   AgentInfo,
   AgentMode,

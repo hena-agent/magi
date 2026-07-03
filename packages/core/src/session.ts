@@ -32,6 +32,7 @@ export type SessionEventType =
   | "verification_result"
   | "context_summary"
   | "queued_user_input"
+  | "model_switch"
   | "summary";
 
 export type SessionEvent = {
