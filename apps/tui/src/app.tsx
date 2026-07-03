@@ -1,5 +1,6 @@
 import { loadConfig } from "@magi/config";
 import { runVerificationCommands } from "@magi/harness";
+import { spawn } from "node:child_process";
 import {
   buildAgentSessionContext,
   buildAgentSystemContext,
@@ -11,13 +12,22 @@ import {
   createToolCall,
   createToolSettlement,
   extractFirstDiffBlock,
+  getAuth,
   getAgent,
+  getDefaultModelSelection,
   getDefaultAgent,
+  getEffectiveModelProviderSummaries,
   getLatestProposedPatch,
+  getLatestModelSelection,
+  listEffectiveModelProviders,
   getToolPermission,
   listAgents,
+  loginOpenAICodexBrowser,
+  loginOpenAICodexHeadless,
   mergeAgentPermission,
   planSessionMaintenance,
+  refreshOpenAICodexAuth,
+  removeAuth,
   runAgentTurn,
   runTool,
   selectReviewLenses,
@@ -25,6 +35,7 @@ import {
   type ExecutableAgentAction,
   type AgentTurnEvent,
   type AgentInfo,
+  type EffectiveModelProvider,
   type Session,
   type SessionEvent,
   type SessionEventType,
@@ -54,36 +65,110 @@ type AppendSessionEventInput = {
   payload: unknown;
 };
 
-const shellCommands = [
-  "bash",
-  "apply_patch",
-  "apply_last_patch",
-  "verify",
-  "revise",
-  "magi_preview",
-  "summary",
-  "sessions",
-  "resume",
-  "new",
-  "rename",
-  "history",
-  "agent",
-  "plan",
-  "build",
-  "queue",
-  "clear_queue",
-  "steer",
-  "interrupt",
-  "maintain_sessions",
-  "session_cleanup_candidates",
-  "help",
+type SlashCommandInfo = {
+  name: string;
+  usage: string;
+  description: string;
+  aliases?: string[];
+};
+
+const slashCommands: SlashCommandInfo[] = [
+  {
+    name: "model",
+    usage: "/model [provider-id|status|reset]",
+    description: "List or switch AI models",
+  },
+  {
+    name: "mode",
+    usage: "/mode",
+    description: "Show current MAGI mode, agent, model, and session",
+  },
+  {
+    name: "auth",
+    usage: "/auth status|login|refresh|logout openai",
+    description: "Manage OpenAI OAuth auth",
+  },
+  { name: "agent", usage: "/agent [agent-id]", description: "List or switch agents" },
+  {
+    name: "plan",
+    usage: "/plan [prompt]",
+    description: "Switch to plan agent, optionally run prompt",
+  },
+  {
+    name: "build",
+    usage: "/build [prompt]",
+    description: "Switch to build agent, optionally run prompt",
+  },
+  { name: "queue", usage: "/queue", description: "Show queued prompts" },
+  { name: "clear_queue", usage: "/clear_queue", description: "Clear queued prompts" },
+  { name: "steer", usage: "/steer <message>", description: "Add steering input for the next run" },
+  {
+    name: "interrupt",
+    usage: "/interrupt",
+    description: "Stop the current run at the next safe point",
+  },
+  { name: "verify", usage: "/verify [command]", description: "Run verification command" },
+  { name: "revise", usage: "/revise", description: "Revise from recent verification failures" },
+  { name: "summary", usage: "/summary", description: "Summarize the workspace" },
+  { name: "sessions", usage: "/sessions [all]", description: "List recent sessions" },
+  { name: "resume", usage: "/resume <session-id|number>", description: "Resume a saved session" },
+  { name: "new", usage: "/new", description: "Start a new draft session" },
+  { name: "rename", usage: "/rename <title>", description: "Rename the current session" },
+  { name: "history", usage: "/history [limit]", description: "Show session event history" },
+  { name: "read", usage: "/read <path>", description: "Read a workspace file" },
+  { name: "glob", usage: "/glob <pattern>", description: "List files matching a glob" },
+  { name: "grep", usage: "/grep <pattern> [include]", description: "Search workspace files" },
+  { name: "bash", usage: "/bash <command>", description: "Run a shell command with permission" },
+  { name: "apply_patch", usage: "/apply_patch <patch-file>", description: "Apply a patch file" },
+  {
+    name: "apply_last_patch",
+    usage: "/apply_last_patch",
+    description: "Apply latest proposed patch",
+  },
+  { name: "magi_preview", usage: "/magi_preview", description: "Preview MAGI consensus context" },
+  {
+    name: "maintain_sessions",
+    usage: "/maintain_sessions",
+    description: "Generate missing titles/summaries",
+  },
+  {
+    name: "session_cleanup_candidates",
+    usage: "/session_cleanup_candidates",
+    description: "Show sessions that look safe to clean up",
+  },
+  { name: "help", usage: "/help", description: "Show command list" },
 ];
+
+function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
+  if (!input.startsWith("/")) {
+    return [];
+  }
+
+  const rawQuery = input.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  if (rawQuery.length === 0) {
+    return slashCommands.slice(0, 8);
+  }
+
+  return slashCommands
+    .filter((command) => {
+      const names = [command.name, ...(command.aliases ?? [])];
+      return names.some((name) => name.toLowerCase().startsWith(rawQuery));
+    })
+    .slice(0, 8);
+}
 
 const defaultSessionTitle = "MAGI TUI session";
 
 type InitialSessionState = {
   session?: Session;
   resumed: boolean;
+};
+
+type QueuedPrompt = {
+  content: string;
+  providerId: string;
+  agent: AgentInfo;
+  queuedAt: string;
 };
 
 export function App() {
@@ -93,12 +178,17 @@ export function App() {
   const canReadInput = Boolean(process.stdin.isTTY && process.stdin.setRawMode);
   const [store] = useState(() => createSessionStore({ workspaceRoot: config.workspaceRoot }));
   const [initialSession] = useState<InitialSessionState>(() => createInitialSession(store, config));
+  const providerSessionIdRef = useRef(initialSession.session?.id ?? crypto.randomUUID());
   const draftEventsRef = useRef<DraftSessionEvent[]>([]);
-  const queuedPromptsRef = useRef<string[]>([]);
+  const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const steeringInputsRef = useRef<string[]>([]);
   const interruptionRequestedRef = useRef(false);
   const [session, setSession] = useState<Session | undefined>(initialSession.session);
   const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => getDefaultAgent());
+  const [activeProviderId, setActiveProviderId] = useState<string | undefined>(() =>
+    getInitialModelProviderId(store, initialSession, config),
+  );
+  const effectiveModelProviders = getEffectiveProviders();
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [
     {
@@ -115,6 +205,14 @@ export function App() {
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
   const [busyDepth, setBusyDepth] = useState(0);
   const isBusy = busyDepth > 0;
+  const slashCommandSuggestions = pendingPermission ? [] : getSlashCommandSuggestions(prompt);
+
+  function getEffectiveProviders(): EffectiveModelProvider[] {
+    return listEffectiveModelProviders({
+      configProviders: config.modelProviders,
+      workspaceRoot: config.workspaceRoot,
+    });
+  }
 
   useEffect(() => {
     return () => {
@@ -171,21 +269,29 @@ export function App() {
     }
 
     if (isBusy) {
-      queuedPromptsRef.current = [...queuedPromptsRef.current, content];
+      const queuedAt = new Date().toISOString();
+      const queuedPrompt = {
+        content,
+        providerId: activeProviderId ?? "",
+        agent: activeAgent,
+        queuedAt,
+      };
+      queuedPromptsRef.current = [...queuedPromptsRef.current, queuedPrompt];
       appendSessionEvent({
         type: "queued_user_input",
         payload: {
           content,
           agentId: activeAgent.id,
+          providerId: activeProviderId,
           mode: "queued",
-          queuedAt: new Date().toISOString(),
+          queuedAt,
         },
       });
       addMessage(`Queued prompt #${queuedPromptsRef.current.length}: ${truncateOneLine(content)}`);
       return;
     }
 
-    await submitAgentPrompt(content, activeAgent);
+    await submitAgentPrompt(content, activeAgent, activeProviderId);
   }
 
   async function handleCommand(content: string): Promise<void> {
@@ -193,8 +299,13 @@ export function App() {
 
     if (command === "help") {
       addMessage(
-        `Commands: ${shellCommands.map((name) => `/${name}`).join(", ")}, /read, /glob, /grep`,
+        `Commands:\n${slashCommands.map((slashCommand) => `${slashCommand.usage} - ${slashCommand.description}`).join("\n")}`,
       );
+      return;
+    }
+
+    if (command === "mode") {
+      showModeStatus();
       return;
     }
 
@@ -272,6 +383,16 @@ export function App() {
 
     if (command === "history") {
       showHistory(args[0]);
+      return;
+    }
+
+    if (command === "auth") {
+      await handleAuthCommand(args);
+      return;
+    }
+
+    if (command === "model") {
+      handleModelCommand(args);
       return;
     }
 
@@ -359,22 +480,34 @@ export function App() {
     await runToolWithPermission(call);
   }
 
-  async function submitAgentPrompt(content: string, agent: AgentInfo): Promise<void> {
+  async function submitAgentPrompt(
+    content: string,
+    agent: AgentInfo,
+    providerId: string | undefined,
+  ): Promise<void> {
     const userEvent = appendSessionEvent({
       type: "user_message",
-      payload: { content, agentId: agent.id },
+      payload: { content, agentId: agent.id, providerId },
     });
     addMessage(`User: ${content}`, `${userEvent.id}-user`);
 
-    await runSingleEngineAgentTurn(content, agent);
+    await runSingleEngineAgentTurn(content, agent, providerId);
   }
 
-  async function runSingleEngineAgentTurn(content: string, agent: AgentInfo): Promise<void> {
+  async function runSingleEngineAgentTurn(
+    content: string,
+    agent: AgentInfo,
+    providerId: string | undefined,
+  ): Promise<void> {
     beginBusy();
     interruptionRequestedRef.current = false;
 
     try {
-      const adapter = createPrimaryModelAdapter(config);
+      const adapter = createPrimaryModelAdapter({
+        ...config,
+        selectedProviderId: providerId,
+        sessionId: providerSessionIdRef.current,
+      });
       const steeringInputs = steeringInputsRef.current;
       steeringInputsRef.current = [];
       const effectiveContent =
@@ -406,6 +539,8 @@ export function App() {
         payload: {
           content: result.finalText,
           agentId: agent.id,
+          providerId: adapter.provider?.id ?? providerId,
+          model: adapter.provider?.model,
           agentTurn: true,
           status: result.status,
         },
@@ -579,9 +714,7 @@ export function App() {
           agentId: agent.id,
         },
       });
-      addMessage(
-        `${call.name}: ${result.ok ? truncate(result.output || "ok") : `failed: ${result.error}`}`,
-      );
+      addMessage(formatToolResultMessage(result, call.input));
       return result;
     } finally {
       endBusy();
@@ -804,6 +937,16 @@ export function App() {
     }
 
     setSession(selectedSession);
+    providerSessionIdRef.current = selectedSession.id;
+    setActiveProviderId(
+      getLatestModelSelection({
+        events: store.listEvents(selectedSession.id),
+        modelProviders: getEffectiveModelProviderSummaries({
+          configProviders: config.modelProviders,
+          workspaceRoot: config.workspaceRoot,
+        }),
+      })?.providerId,
+    );
     setMessages([
       {
         id: crypto.randomUUID(),
@@ -819,6 +962,10 @@ export function App() {
     }
 
     draftEventsRef.current = [];
+    providerSessionIdRef.current = crypto.randomUUID();
+    setActiveProviderId(
+      getDefaultModelSelection({ modelProviders: effectiveModelProviders })?.providerId,
+    );
     setSession(undefined);
     setMessages([
       {
@@ -878,7 +1025,211 @@ export function App() {
       return;
     }
 
-    await submitAgentPrompt(content, agent);
+    await submitAgentPrompt(content, agent, activeProviderId);
+  }
+
+  async function handleAuthCommand(args: string[]): Promise<void> {
+    const [subcommand = "status", provider = "openai", mode = "browser"] = args;
+
+    if (provider !== "openai") {
+      addMessage("Only OpenAI auth is supported right now.");
+      return;
+    }
+
+    if (subcommand === "status") {
+      const auth = getAuth({ workspaceRoot: config.workspaceRoot, providerId: "openai" });
+
+      if (!auth) {
+        addMessage("OpenAI auth: not logged in.");
+        return;
+      }
+
+      if (auth.type === "oauth") {
+        addMessage(
+          [
+            "OpenAI auth: oauth",
+            `Expires: ${new Date(auth.expires).toISOString()}`,
+            `Account: ${auth.accountId ?? "unknown"}`,
+          ].join("\n"),
+        );
+        return;
+      }
+
+      addMessage(`OpenAI auth: ${auth.type}`);
+      return;
+    }
+
+    if (subcommand === "logout") {
+      removeAuth({ workspaceRoot: config.workspaceRoot, providerId: "openai" });
+      addMessage("OpenAI auth removed.");
+      return;
+    }
+
+    if (subcommand === "refresh") {
+      const auth = getAuth({ workspaceRoot: config.workspaceRoot, providerId: "openai" });
+
+      if (auth?.type !== "oauth") {
+        addMessage("OpenAI OAuth auth is missing. Run /auth login openai.");
+        return;
+      }
+
+      beginBusy();
+
+      try {
+        const refreshed = await refreshOpenAICodexAuth({
+          workspaceRoot: config.workspaceRoot,
+          auth,
+        });
+        addMessage(`OpenAI OAuth refreshed. Expires: ${new Date(refreshed.expires).toISOString()}`);
+      } catch (error) {
+        addMessage(`OpenAI OAuth refresh failed. Run /auth login openai. ${formatError(error)}`);
+      } finally {
+        endBusy();
+      }
+
+      return;
+    }
+
+    if (subcommand !== "login") {
+      addMessage(
+        "Usage: /auth status | /auth login openai [browser|headless] | /auth refresh openai | /auth logout openai",
+      );
+      return;
+    }
+
+    beginBusy();
+
+    try {
+      if (mode === "headless") {
+        const auth = await loginOpenAICodexHeadless({
+          workspaceRoot: config.workspaceRoot,
+          onUserCode({ url, code }) {
+            addMessage(`Open ${url} and enter code: ${code}`);
+          },
+        });
+        addMessage(`OpenAI OAuth login complete. Account: ${auth.accountId ?? "unknown"}`);
+        return;
+      }
+
+      const auth = await loginOpenAICodexBrowser({
+        workspaceRoot: config.workspaceRoot,
+        openUrl(url) {
+          addMessage(`Opening browser for OpenAI OAuth: ${url}`);
+          openExternalUrl(url);
+        },
+      });
+      addMessage(`OpenAI OAuth login complete. Account: ${auth.accountId ?? "unknown"}`);
+    } catch (error) {
+      addMessage(`OpenAI OAuth login failed: ${formatError(error)}`);
+    } finally {
+      endBusy();
+    }
+  }
+
+  function handleModelCommand(args: string[]): void {
+    const [subcommand = ""] = args;
+
+    if (subcommand.length === 0 || subcommand === "status") {
+      addMessage(formatModelStatus(activeProviderId));
+      return;
+    }
+
+    if (subcommand === "reset") {
+      const selection = getDefaultModelSelection({ modelProviders: effectiveModelProviders });
+
+      if (!selection) {
+        addMessage("No model providers configured.");
+        return;
+      }
+
+      switchModelProvider(selection.providerId);
+      return;
+    }
+
+    switchModelProvider(subcommand);
+  }
+
+  function showModeStatus(): void {
+    addMessage(
+      [
+        `Mode: ${task.mode}`,
+        `Agent: ${activeAgent.id} (${activeAgent.mode})`,
+        `Model: ${formatProviderLine(activeProviderId ?? effectiveModelProviders[0]?.id, true)}`,
+        `Risk: ${task.riskLevel}`,
+        `Session: ${session?.id ?? "draft"}`,
+        `Queued prompts: ${queuedPromptsRef.current.length}`,
+      ].join("\n"),
+    );
+  }
+
+  function switchModelProvider(providerId: string): void {
+    if (isBusy || pendingPermission) {
+      addMessage("Cannot switch models while a command is running or waiting for permission.");
+      return;
+    }
+
+    const provider = effectiveModelProviders.find((candidate) => candidate.id === providerId);
+
+    if (!provider) {
+      addMessage(`Model provider not configured: ${providerId}`);
+      return;
+    }
+
+    const previousProviderId = activeProviderId;
+    setActiveProviderId(provider.id);
+    appendSessionEvent({
+      type: "model_switch",
+      payload: {
+        providerId: provider.id,
+        model: provider.model,
+        ...(previousProviderId === undefined ? {} : { previousProviderId }),
+      },
+    });
+    addMessage(`Switched model: ${provider.id} (${provider.model})`);
+  }
+
+  function formatModelStatus(providerId: string | undefined): string {
+    if (effectiveModelProviders.length === 0) {
+      return "No model providers configured.";
+    }
+
+    const activeId = providerId ?? effectiveModelProviders[0]?.id;
+    const lines = [
+      `Active model: ${formatProviderLine(activeId, true)}`,
+      "Available models:",
+      ...effectiveModelProviders.map((provider) =>
+        formatProviderLine(provider.id, false, activeId),
+      ),
+    ];
+
+    return lines.join("\n");
+  }
+
+  function formatProviderLine(
+    providerId: string | undefined,
+    compact: boolean,
+    activeId = providerId,
+  ): string {
+    if (!providerId) {
+      return "none";
+    }
+
+    const provider = effectiveModelProviders.find((candidate) => candidate.id === providerId);
+
+    if (!provider) {
+      return providerId;
+    }
+
+    const marker = compact ? "" : provider.id === activeId ? "* " : "- ";
+    const auth =
+      provider.auth?.type === "oauth"
+        ? `oauth:${provider.authStatus ?? "unknown"}`
+        : provider.apiKeyEnv
+          ? `env:${provider.apiKeyEnv}`
+          : "default";
+    const source = compact ? "" : `, ${provider.source}`;
+
+    return `${marker}${provider.id} (${provider.model}, ${provider.provider}, ${auth}${source})`;
   }
 
   function switchAgent(agentId: string): AgentInfo | undefined {
@@ -927,7 +1278,8 @@ export function App() {
       [
         `Queued prompts (${queuedPromptsRef.current.length}):`,
         ...queuedPromptsRef.current.map(
-          (queuedPrompt, index) => `${index + 1}. ${truncateOneLine(queuedPrompt)}`,
+          (queuedPrompt, index) =>
+            `${index + 1}. [${queuedPrompt.providerId || "default"}/${queuedPrompt.agent.id}] ${truncateOneLine(queuedPrompt.content)}`,
         ),
       ].join("\n"),
     );
@@ -1019,10 +1371,15 @@ export function App() {
     if (nextPrompt !== undefined) {
       const userEvent = appendSessionEvent({
         type: "user_message",
-        payload: { content: nextPrompt, agentId: activeAgent.id, source: "queued" },
+        payload: {
+          content: nextPrompt.content,
+          agentId: nextPrompt.agent.id,
+          providerId: nextPrompt.providerId,
+          source: "queued",
+        },
       });
-      addMessage(`User: ${nextPrompt}`, `${userEvent.id}-user`);
-      await runSingleEngineAgentTurn(nextPrompt, activeAgent);
+      addMessage(`User: ${nextPrompt.content}`, `${userEvent.id}-user`);
+      await runSingleEngineAgentTurn(nextPrompt.content, nextPrompt.agent, nextPrompt.providerId);
     }
   }
 
@@ -1162,6 +1519,7 @@ export function App() {
       </Text>
       <Text>Mode: {task.mode}</Text>
       <Text>Agent: {activeAgent.id}</Text>
+      <Text>Model: {activeProviderId ?? effectiveModelProviders[0]?.id ?? "none"}</Text>
       <Text>Risk: {task.riskLevel}</Text>
       <Text>Workspace: {config.workspaceRoot}</Text>
       <Text>Session: {session?.id ?? "draft"}</Text>
@@ -1175,6 +1533,16 @@ export function App() {
         <Text color="yellow">{`Permission: ${pendingPermission.description}`}</Text>
       ) : null}
       <Text>{pendingPermission ? "Allow? [y/N]" : `> ${prompt}`}</Text>
+      {slashCommandSuggestions.length > 0 ? (
+        <Box flexDirection="column" marginLeft={2}>
+          {slashCommandSuggestions.map((command) => (
+            <Text key={command.name}>
+              <Text color="cyan">{command.usage}</Text>
+              <Text dimColor>{`  ${command.description}`}</Text>
+            </Text>
+          ))}
+        </Box>
+      ) : null}
       <Text dimColor>
         {canReadInput
           ? "Type a prompt, /help for commands, or q on an empty prompt to quit."
@@ -1222,6 +1590,23 @@ function createInitialSession(
   }
 
   return { resumed: false };
+}
+
+function getInitialModelProviderId(
+  store: SessionStore,
+  initialSession: InitialSessionState,
+  config: ReturnType<typeof loadConfig>,
+): string | undefined {
+  const events = initialSession.session ? store.listEvents(initialSession.session.id) : [];
+  const selection = getLatestModelSelection({
+    events,
+    modelProviders: getEffectiveModelProviderSummaries({
+      configProviders: config.modelProviders,
+      workspaceRoot: config.workspaceRoot,
+    }),
+  });
+
+  return selection?.providerId;
 }
 
 function createSessionTitle(input: { userMessage: string; assistantMessage: string }): string {
@@ -1285,6 +1670,13 @@ function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): 
           ? [{ id: event.id, content: truncate(payload.text) }]
           : [];
       }
+      case "model_switch": {
+        const payload = event.payload as { providerId?: unknown; model?: unknown };
+
+        return typeof payload.providerId === "string" && typeof payload.model === "string"
+          ? [{ id: event.id, content: `model: ${payload.providerId} (${payload.model})` }]
+          : [];
+      }
       default:
         return [];
     }
@@ -1307,10 +1699,19 @@ function formatEventPayload(event: SessionEvent): string {
       return typeof payload.name === "string" ? payload.name : "tool";
     }
     case "tool_result": {
-      const payload = event.payload as { name?: unknown; ok?: unknown; error?: unknown };
+      const payload = event.payload as {
+        name?: unknown;
+        ok?: unknown;
+        output?: unknown;
+        error?: unknown;
+      };
       const name = typeof payload.name === "string" ? payload.name : "tool";
 
-      return `${name}: ${payload.ok === true ? "ok" : "failed"}${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
+      if (payload.ok !== true) {
+        return `${name}: failed${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
+      }
+
+      return `${name}: ${formatOutputSummary(typeof payload.output === "string" ? payload.output : "")}`;
     }
     case "tool_settlement": {
       const payload = event.payload as { name?: unknown; status?: unknown; error?: unknown };
@@ -1367,6 +1768,11 @@ function formatEventPayload(event: SessionEvent): string {
     }
     case "summary":
       return "workspace summary";
+    case "model_switch": {
+      const payload = event.payload as { providerId?: unknown; model?: unknown };
+
+      return `${String(payload.providerId ?? "unknown")}: ${String(payload.model ?? "unknown")}`;
+    }
     case "magi_decision_trail":
       return "MAGI decision trail";
   }
@@ -1384,6 +1790,66 @@ function isToolName(value: string): value is ToolName {
 
 function truncate(value: string): string {
   return value.length > 2000 ? `${value.slice(0, 2000)}\n... truncated` : value;
+}
+
+function formatToolResultMessage(result: ToolResult, input: unknown): string {
+  if (!result.ok) {
+    return `${result.name}: failed${result.error ? `: ${result.error}` : ""}`;
+  }
+
+  const output = result.output.trim();
+
+  switch (result.name) {
+    case "read": {
+      const path = readInputString(input, "path") ?? "file";
+      const lineCount = output.length === 0 ? 0 : output.split("\n").length;
+      const preview = output.length === 0 ? "empty file" : truncate(output);
+
+      return `read: ${path} (${lineCount} lines, ${result.output.length} chars)\n${preview}`;
+    }
+    case "glob": {
+      const pattern = readInputString(input, "pattern") ?? "pattern";
+      const matches = output.length === 0 ? [] : output.split("\n");
+
+      return matches.length === 0
+        ? `glob: no matches for ${pattern}`
+        : `glob: ${matches.length} matches for ${pattern}\n${truncate(matches.join("\n"))}`;
+    }
+    case "grep": {
+      const pattern = readInputString(input, "pattern") ?? "pattern";
+      const include = readInputString(input, "include");
+      const matches = output.length === 0 ? [] : output.split("\n");
+      const target = include ? `${pattern} in ${include}` : pattern;
+
+      return matches.length === 0
+        ? `grep: no matches for ${target}`
+        : `grep: ${matches.length} matches for ${target}\n${truncate(matches.join("\n"))}`;
+    }
+    default:
+      return `${result.name}: ${formatOutputSummary(result.output)}`;
+  }
+}
+
+function formatOutputSummary(output: string): string {
+  const trimmed = output.trim();
+
+  if (trimmed.length === 0) {
+    return "empty output";
+  }
+
+  const lines = trimmed.split("\n");
+  return lines.length === 1
+    ? truncateOneLine(trimmed)
+    : `${lines.length} lines: ${truncateOneLine(trimmed)}`;
+}
+
+function readInputString(input: unknown, field: string): string | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return undefined;
+  }
+
+  const value = (input as Record<string, unknown>)[field];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function truncateTitle(value: string): string {
@@ -1423,6 +1889,15 @@ function truncateOneLine(value: string): string {
   const oneLine = value.replaceAll("\n", " ");
 
   return oneLine.length > 160 ? `${oneLine.slice(0, 160)}...` : oneLine;
+}
+
+function openExternalUrl(url: string): void {
+  const command =
+    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.unref();
 }
 
 function formatError(error: unknown): string {
