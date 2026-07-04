@@ -249,6 +249,8 @@ function isToolName(value: string): value is ToolName {
     value === "read" ||
     value === "glob" ||
     value === "grep" ||
+    value === "edit" ||
+    value === "write" ||
     value === "apply_patch" ||
     value === "bash"
   );

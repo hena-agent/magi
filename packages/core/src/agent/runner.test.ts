@@ -72,6 +72,86 @@ describe("getAgentRunContinuation", () => {
     expect(result.finalText).toBe("done");
   });
 
+  it("exposes apply_patch for GPT Codex-style models", async () => {
+    let tools: string[] = [];
+    let stepCalls = 0;
+    const result = await runEventDrivenAgent({
+      engine: {
+        provider: { id: "openai", provider: "openai", model: "gpt-5.5-codex" },
+        async generateText() {
+          return { text: JSON.stringify({ type: "finish", summary: "done" }) };
+        },
+        async generateStep(input) {
+          stepCalls += 1;
+          tools = input.tools.map((tool) => tool.name);
+          if (stepCalls > 1) {
+            return { text: "done", toolCalls: [] };
+          }
+          return {
+            text: "",
+            toolCalls: [
+              {
+                id: "tool-1",
+                name: "apply_patch",
+                input: { patchText: "*** Begin Patch\n*** End Patch" },
+              },
+            ],
+          };
+        },
+      },
+      userMessage: "Patch",
+      async executeAction(action) {
+        expect(action.type).toBe("apply_patch");
+        return "patched";
+      },
+    });
+
+    expect(tools).toContain("apply_patch");
+    expect(tools).not.toContain("edit");
+    expect(tools).not.toContain("write");
+    expect(result.status).toBe("completed");
+  });
+
+  it("exposes edit and write for non-Codex models", async () => {
+    let tools: string[] = [];
+    let stepCalls = 0;
+    const result = await runEventDrivenAgent({
+      engine: {
+        provider: { id: "claude", provider: "custom", model: "claude-sonnet-4-5" },
+        async generateText() {
+          return { text: JSON.stringify({ type: "finish", summary: "done" }) };
+        },
+        async generateStep(input) {
+          stepCalls += 1;
+          tools = input.tools.map((tool) => tool.name);
+          if (stepCalls > 1) {
+            return { text: "done", toolCalls: [] };
+          }
+          return {
+            text: "",
+            toolCalls: [
+              {
+                id: "tool-1",
+                name: "edit",
+                input: { filePath: "README.md", oldString: "old", newString: "new" },
+              },
+            ],
+          };
+        },
+      },
+      userMessage: "Edit",
+      async executeAction(action) {
+        expect(action.type).toBe("edit");
+        return "edited";
+      },
+    });
+
+    expect(tools).toContain("edit");
+    expect(tools).toContain("write");
+    expect(tools).not.toContain("apply_patch");
+    expect(result.status).toBe("completed");
+  });
+
   it("stops at a safe point when interrupted", async () => {
     const result = await runEventDrivenAgent({
       engine: {

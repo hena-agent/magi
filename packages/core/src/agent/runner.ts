@@ -243,12 +243,14 @@ const agentTurnSystemPrompt = [
   "Use the smallest useful action. Prefer read/glob/grep before proposing changes.",
   "If you have enough information, use finish or answer.",
   "Do not repeat the same action. If an action result is already available, use it or choose a different action.",
-  "If you propose a patch, provide a git-apply-compatible unified diff in the patch field.",
+  "For models using apply_patch, provide an OpenCode-style *** Begin Patch envelope in patchText.",
+  "For models using edit/write, use exact oldString/newString replacements or full file writes.",
 ].join("\n");
 
 function formatAgentTurnPrompt(input: {
   agent: AgentInfo;
   userMessage: string;
+  model?: string;
   sessionContext?: string;
   systemContext?: string[];
   observations: string[];
@@ -256,6 +258,24 @@ function formatAgentTurnPrompt(input: {
   maxIterations: number;
   isLastStep: boolean;
 }): string {
+  const writeActions =
+    getEditToolMode(input.agent, input.model) === "patch"
+      ? [
+          {
+            type: "apply_patch",
+            patchText: "*** Begin Patch\n*** Update File: path\n@@\n-old\n+new\n*** End Patch",
+          },
+        ]
+      : [
+          {
+            type: "edit",
+            filePath: "relative/path",
+            oldString: "exact text to replace",
+            newString: "replacement text",
+            replaceAll: false,
+          },
+          { type: "write", filePath: "relative/path", content: "full file content" },
+        ];
   const executableActions = [
     { type: "read", path: "relative/path" },
     { type: "glob", pattern: "**/*.ts" },
@@ -265,7 +285,10 @@ function formatAgentTurnPrompt(input: {
       : [{ type: "verify", command: "optional focused command" }]),
     ...(input.agent.permission.write === "deny"
       ? []
-      : [{ type: "propose_patch", summary: "what changes", patch: "unified diff" }]),
+      : [
+          ...writeActions,
+          { type: "propose_patch", summary: "what changes", patch: "unified diff" },
+        ]),
   ];
   const availableActions = input.isLastStep
     ? [
@@ -324,7 +347,7 @@ async function generateAgentAction(input: {
             content: formatNativeToolPrompt(input),
           },
         ],
-        tools: input.agent.permission.read === "deny" ? [] : nativeToolDefinitions,
+        tools: getNativeToolDefinitions(input.agent, input.engine.provider?.model),
         toolChoice: "auto",
       });
       const [toolCall] = nativeResponse.toolCalls;
@@ -348,7 +371,7 @@ async function generateAgentAction(input: {
       agentTurnSystemPrompt,
       input.systemContext,
     ),
-    prompt: formatAgentTurnPrompt(input),
+    prompt: formatAgentTurnPrompt({ ...input, model: input.engine.provider?.model }),
   });
 
   return validateAgentAction(parseJsonObjectFromText(response.text));
@@ -374,7 +397,7 @@ function buildAgentSystemPrompt(
 
 const nativeToolSystemPrompt = [
   "You are MAGI running one local coding-agent step.",
-  "Use tools only when needed to inspect the repository.",
+  "Use tools only when needed to inspect or modify the repository.",
   "If no tool is needed, answer concisely with the available observations.",
 ].join("\n");
 
@@ -399,7 +422,7 @@ function formatNativeToolPrompt(input: {
   ].join("\n");
 }
 
-const nativeToolDefinitions = [
+const readNativeToolDefinitions = [
   {
     name: "read" as const,
     description: "Read a UTF-8 text file inside the workspace.",
@@ -432,6 +455,70 @@ const nativeToolDefinitions = [
   },
 ];
 
+const editNativeToolDefinitions = [
+  {
+    name: "edit" as const,
+    description:
+      "Perform an exact string replacement in a workspace file. Prefer after reading the file. Use replaceAll only when all occurrences should change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        oldString: { type: "string" },
+        newString: { type: "string" },
+        replaceAll: { type: "boolean" },
+      },
+      required: ["filePath", "oldString", "newString"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "write" as const,
+    description: "Write full content to a workspace file. Prefer edit for existing files.",
+    inputSchema: {
+      type: "object",
+      properties: { filePath: { type: "string" }, content: { type: "string" } },
+      required: ["filePath", "content"],
+      additionalProperties: false,
+    },
+  },
+];
+
+const patchNativeToolDefinitions = [
+  {
+    name: "apply_patch" as const,
+    description:
+      "Apply an OpenCode-style patch envelope with *** Begin Patch / *** End Patch and Add/Delete/Update file sections.",
+    inputSchema: {
+      type: "object",
+      properties: { patchText: { type: "string" } },
+      required: ["patchText"],
+      additionalProperties: false,
+    },
+  },
+];
+
+function getNativeToolDefinitions(agent: AgentInfo, model: string | undefined) {
+  return [
+    ...(agent.permission.read === "deny" ? [] : readNativeToolDefinitions),
+    ...(agent.permission.write === "deny"
+      ? []
+      : getEditToolMode(agent, model) === "patch"
+        ? patchNativeToolDefinitions
+        : editNativeToolDefinitions),
+  ];
+}
+
+function getEditToolMode(_agent: AgentInfo, model?: string): "patch" | "edit" {
+  if (!model) {
+    return "patch";
+  }
+
+  return model.includes("gpt-") && !model.includes("oss") && !model.includes("gpt-4")
+    ? "patch"
+    : "edit";
+}
+
 function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction {
   const input = readToolInput(toolCall.input);
 
@@ -450,7 +537,24 @@ function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction {
       };
     }
     case "apply_patch":
-      return { type: "propose_patch", patch: readString(input, "patch") };
+      return { type: "apply_patch", patchText: readString(input, "patchText") };
+    case "edit": {
+      const replaceAll = readOptionalBoolean(input, "replaceAll");
+
+      return {
+        type: "edit",
+        filePath: readString(input, "filePath"),
+        oldString: readStringAllowEmpty(input, "oldString"),
+        newString: readStringAllowEmpty(input, "newString"),
+        ...(replaceAll === undefined ? {} : { replaceAll }),
+      };
+    }
+    case "write":
+      return {
+        type: "write",
+        filePath: readString(input, "filePath"),
+        content: readStringAllowEmpty(input, "content"),
+      };
     case "bash":
       return { type: "verify", command: readString(input, "command") };
   }
@@ -474,6 +578,16 @@ function readString(input: Record<string, unknown>, field: string): string {
   return value;
 }
 
+function readStringAllowEmpty(input: Record<string, unknown>, field: string): string {
+  const value = input[field];
+
+  if (typeof value !== "string") {
+    throw new Error(`Native tool input requires string field: ${field}`);
+  }
+
+  return value;
+}
+
 function readOptionalString(input: Record<string, unknown>, field: string): string | undefined {
   const value = input[field];
 
@@ -483,6 +597,20 @@ function readOptionalString(input: Record<string, unknown>, field: string): stri
 
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`Native tool input field must be a non-empty string: ${field}`);
+  }
+
+  return value;
+}
+
+function readOptionalBoolean(input: Record<string, unknown>, field: string): boolean | undefined {
+  const value = input[field];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    throw new Error(`Native tool input field must be a boolean: ${field}`);
   }
 
   return value;
@@ -506,6 +634,12 @@ function getActionKey(action: ExecutableAgentAction): string {
       return `glob:${action.pattern}`;
     case "grep":
       return `grep:${action.pattern}:${action.include ?? ""}`;
+    case "edit":
+      return `edit:${action.filePath}:${action.oldString}:${action.newString}:${action.replaceAll ?? false}`;
+    case "write":
+      return `write:${action.filePath}:${action.content}`;
+    case "apply_patch":
+      return `apply_patch:${action.patchText}`;
     case "verify":
       return `verify:${action.command ?? ""}`;
     case "propose_patch":
