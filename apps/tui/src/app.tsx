@@ -575,6 +575,26 @@ export function App() {
           }),
           agent,
         );
+      case "edit":
+        return await executeToolAction(
+          createToolCall("edit", {
+            filePath: action.filePath,
+            oldString: action.oldString,
+            newString: action.newString,
+            ...(action.replaceAll === undefined ? {} : { replaceAll: action.replaceAll }),
+          }),
+          agent,
+        );
+      case "write":
+        return await executeToolAction(
+          createToolCall("write", { filePath: action.filePath, content: action.content }),
+          agent,
+        );
+      case "apply_patch":
+        return await executeToolAction(
+          createToolCall("apply_patch", { patchText: action.patchText }),
+          agent,
+        );
       case "verify":
         return await runVerification(action.command ?? "", agent);
       case "propose_patch": {
@@ -1572,6 +1592,35 @@ function parseToolCommand(command: string, rawArgs: string): ToolCall | undefine
     }
     case "bash":
       return createToolCall(command, { command: rawArgs });
+    case "edit": {
+      const firstSpaceIndex = rawArgs.search(/\s/);
+      const filePath =
+        firstSpaceIndex === -1 ? rawArgs.trim() : rawArgs.slice(0, firstSpaceIndex).trim();
+      const args = firstSpaceIndex === -1 ? "" : rawArgs.slice(firstSpaceIndex).trimStart();
+      const separatorIndex = args.indexOf("=>");
+
+      if (separatorIndex === -1) {
+        return createToolCall(command, { filePath, oldString: args, newString: "" });
+      }
+
+      return createToolCall(command, {
+        filePath,
+        oldString: args.slice(0, separatorIndex).trim(),
+        newString: args.slice(separatorIndex + "=>".length).trim(),
+      });
+    }
+    case "write": {
+      const firstSpaceIndex = rawArgs.search(/\s/);
+
+      if (firstSpaceIndex === -1) {
+        return createToolCall(command, { filePath: rawArgs.trim(), content: "" });
+      }
+
+      return createToolCall(command, {
+        filePath: rawArgs.slice(0, firstSpaceIndex).trim(),
+        content: rawArgs.slice(firstSpaceIndex).trimStart(),
+      });
+    }
     case "apply_patch":
       return createToolCall(command, { patchFile: rawArgs.trim() });
   }
@@ -1783,6 +1832,8 @@ function isToolName(value: string): value is ToolName {
     value === "read" ||
     value === "glob" ||
     value === "grep" ||
+    value === "edit" ||
+    value === "write" ||
     value === "bash" ||
     value === "apply_patch"
   );
