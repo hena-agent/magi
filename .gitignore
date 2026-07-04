@@ -6,5 +6,4 @@ coverage/
 .env
 .env.*
 !.env.example
-.magi/*.db
-.magi/*.db-*
+.magi/
