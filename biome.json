@@ -3,6 +3,7 @@
   "vcs": {
     "enabled": true,
     "clientKind": "git",
+    "defaultBranch": "develop",
     "useIgnoreFile": true
   },
   "files": {
@@ -25,7 +26,26 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "recommended": true,
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "error",
+        "noExcessiveLinesPerFunction": "error"
+      },
+      "style": {
+        "noExcessiveLinesPerFile": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noUnknownAtRules": "off"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
     }
   }
 }
