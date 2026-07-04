@@ -1,0 +1,165 @@
+import { MAGI_PLAN_REMINDER } from "./prompts.js";
+import type { AgentInfo } from "./registry.js";
+import { getEditToolMode } from "./runner-native-tools.js";
+import { truncateObservation } from "./runner-utils.js";
+
+export const agentTurnSystemPrompt = [
+  "You are MAGI running one local coding-agent turn.",
+  "Respond only with JSON. Do not wrap the JSON in prose.",
+  "Use the smallest useful action. Prefer read/glob/grep before proposing changes.",
+  "If you have enough information, use finish or answer.",
+  "Do not repeat the same action. If an action result is already available, use it or choose a different action.",
+  "For models using apply_patch, provide an OpenCode-style *** Begin Patch envelope in patchText.",
+  "For models using edit/write, use exact oldString/newString replacements or full file writes.",
+].join("\n");
+
+export const nativeToolSystemPrompt = [
+  "You are MAGI running one local coding-agent step.",
+  "Use tools only when needed to inspect or modify the repository.",
+  "If no tool is needed, answer concisely with the available observations.",
+].join("\n");
+
+export function formatAgentTurnPrompt(input: {
+  agent: AgentInfo;
+  userMessage: string;
+  model?: string;
+  sessionContext?: string;
+  systemContext?: string[];
+  observations: string[];
+  iteration: number;
+  maxIterations: number;
+  isLastStep: boolean;
+}): string {
+  return [
+    `User request: ${formatUserMessageWithReminders(input.agent, input.userMessage)}`,
+    "",
+    "Prior session context:",
+    input.sessionContext === undefined || input.sessionContext.length === 0
+      ? "(none)"
+      : input.sessionContext,
+    `Iteration: ${input.iteration}/${input.maxIterations}`,
+    input.isLastStep
+      ? "This is the final step. Tools/actions are disabled. You must respond with answer or finish only."
+      : "Choose one available action.",
+    "",
+    "Available JSON actions:",
+    JSON.stringify(getAvailableActions(input), null, 2),
+    "",
+    "Observations so far:",
+    input.observations.length === 0 ? "(none)" : input.observations.join("\n\n"),
+  ].join("\n");
+}
+
+export function buildAgentSystemPrompt(
+  agent: AgentInfo,
+  isLastStep: boolean,
+  protocolPrompt = agentTurnSystemPrompt,
+  systemContext: string[] = [],
+): string {
+  return [
+    agent.prompt,
+    ...systemContext,
+    protocolPrompt,
+    isLastStep
+      ? "This is the final text-only step. Do not request tools or actions; answer with available observations."
+      : undefined,
+  ]
+    .filter((part) => part !== undefined && part.length > 0)
+    .join("\n\n");
+}
+
+export function formatNativeToolPrompt(input: {
+  agent: AgentInfo;
+  userMessage: string;
+  sessionContext?: string;
+  observations: string[];
+  iteration: number;
+  maxIterations: number;
+}): string {
+  return [
+    `User request: ${formatUserMessageWithReminders(input.agent, input.userMessage)}`,
+    "",
+    "Prior session context:",
+    input.sessionContext === undefined || input.sessionContext.length === 0
+      ? "(none)"
+      : input.sessionContext,
+    `Iteration: ${input.iteration}/${input.maxIterations}`,
+    "Observations so far:",
+    input.observations.length === 0 ? "(none)" : input.observations.join("\n\n"),
+  ].join("\n");
+}
+
+export function summarizeStoppedTurn(observations: string[]): string {
+  if (observations.length === 0) {
+    return "Agent reached the step limit before gathering observations. Try a narrower request or increase agent.maxIterations.";
+  }
+
+  return [
+    "Agent reached the configured step limit before producing a final response.",
+    "Useful observations gathered so far:",
+    truncateObservation(observations.slice(-5).join("\n\n")),
+    "Increase agent.maxIterations or ask a narrower follow-up if more work is needed.",
+  ].join("\n\n");
+}
+
+function getAvailableActions(input: { agent: AgentInfo; model?: string; isLastStep: boolean }) {
+  if (input.isLastStep) {
+    return [
+      { type: "answer", content: "Final answer using observations gathered so far." },
+      { type: "finish", summary: "Final concise result using observations gathered so far." },
+    ];
+  }
+
+  return [
+    { type: "answer", content: "Direct answer for simple questions." },
+    ...getExecutableActions(input.agent, input.model),
+    { type: "finish", summary: "final concise result" },
+  ];
+}
+
+function getExecutableActions(agent: AgentInfo, model: string | undefined) {
+  return [
+    { type: "read", path: "relative/path" },
+    { type: "glob", pattern: "**/*.ts" },
+    { type: "grep", pattern: "search regex", include: "optional glob" },
+    ...(agent.permission.shell === "deny"
+      ? []
+      : [{ type: "verify", command: "optional focused command" }]),
+    ...(agent.permission.write === "deny"
+      ? []
+      : [
+          ...getWriteActions(agent, model),
+          { type: "propose_patch", summary: "what changes", patch: "unified diff" },
+        ]),
+  ];
+}
+
+function getWriteActions(agent: AgentInfo, model: string | undefined) {
+  return getEditToolMode(agent, model) === "patch"
+    ? [
+        {
+          type: "apply_patch",
+          patchText: "*** Begin Patch\n*** Update File: path\n@@\n-old\n+new\n*** End Patch",
+        },
+      ]
+    : [
+        {
+          type: "edit",
+          filePath: "relative/path",
+          oldString: "exact text to replace",
+          newString: "replacement text",
+          replaceAll: false,
+        },
+        { type: "write", filePath: "relative/path", content: "full file content" },
+      ];
+}
+
+function formatUserMessageWithReminders(agent: AgentInfo, userMessage: string): string {
+  if (agent.id !== "plan") {
+    return userMessage;
+  }
+
+  return [userMessage, "", "<system-reminder>", MAGI_PLAN_REMINDER, "</system-reminder>"].join(
+    "\n",
+  );
+}

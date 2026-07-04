@@ -77,97 +77,117 @@ function formatSummary(event: SessionEvent | undefined): string {
 
 function formatEvent(event: SessionEvent, maxToolOutputCharacters: number): string[] {
   switch (event.type) {
-    case "user_message": {
-      const payload = event.payload as { content?: unknown };
-
-      return typeof payload.content === "string"
-        ? [`User: ${truncateTail(payload.content, 2_000)}`]
-        : [];
-    }
-    case "queued_user_input": {
-      const payload = event.payload as { content?: unknown; mode?: unknown };
-
-      return typeof payload.content === "string"
-        ? [`Queued ${String(payload.mode ?? "input")}: ${truncateTail(payload.content, 1_000)}`]
-        : [];
-    }
-    case "assistant_message": {
-      const payload = event.payload as { content?: unknown };
-
-      return typeof payload.content === "string"
-        ? [`Assistant: ${truncateTail(payload.content, 2_000)}`]
-        : [];
-    }
-    case "verification_result": {
-      const payload = event.payload as { command?: unknown; status?: unknown; stderr?: unknown };
-      const command = typeof payload.command === "string" ? payload.command : "unknown command";
-      const status = typeof payload.status === "string" ? payload.status : "unknown";
-      const stderr = typeof payload.stderr === "string" && payload.stderr.length > 0;
-
-      return [
-        `Verification: ${command}: ${status}${stderr ? `\nstderr:\n${truncateTail(payload.stderr as string, 1_000)}` : ""}`,
-      ];
-    }
-    case "tool_settlement": {
-      const payload = event.payload as {
-        name?: unknown;
-        status?: unknown;
-        outputPreview?: unknown;
-        error?: unknown;
-      };
-      const name = typeof payload.name === "string" ? payload.name : "tool";
-      const status = typeof payload.status === "string" ? payload.status : "unknown";
-      const detail =
-        typeof payload.error === "string" && payload.error.length > 0
-          ? payload.error
-          : typeof payload.outputPreview === "string"
-            ? payload.outputPreview
-            : "";
-
-      return [
-        `Tool settlement: ${name}: ${status}${detail ? `\n${truncateTail(detail, maxToolOutputCharacters)}` : ""}`,
-      ];
-    }
-    case "tool_result": {
-      const payload = event.payload as {
-        name?: unknown;
-        ok?: unknown;
-        output?: unknown;
-        error?: unknown;
-      };
-      const name = typeof payload.name === "string" ? payload.name : "tool";
-      const status = payload.ok === true ? "ok" : "failed";
-      const detail =
-        typeof payload.error === "string" && payload.error.length > 0
-          ? payload.error
-          : typeof payload.output === "string"
-            ? payload.output
-            : "";
-
-      return [
-        `Tool result: ${name}: ${status}${detail ? `\n${truncateTail(detail, maxToolOutputCharacters)}` : ""}`,
-      ];
-    }
-    case "provider_error": {
-      const payload = event.payload as { message?: unknown };
-
-      return typeof payload.message === "string"
-        ? [`Provider error: ${truncateTail(payload.message, 1_000)}`]
-        : [];
-    }
-    case "interruption": {
-      const payload = event.payload as { reason?: unknown };
-
-      return [`Interrupted: ${String(payload.reason ?? "unknown")}`];
-    }
-    case "proposed_patch": {
-      const payload = event.payload as { summary?: unknown };
-
-      return typeof payload.summary === "string" ? [`Proposed patch: ${payload.summary}`] : [];
-    }
+    case "user_message":
+      return formatContentEvent(event.payload, "User", 2_000);
+    case "queued_user_input":
+      return formatQueuedInput(event.payload);
+    case "assistant_message":
+      return formatContentEvent(event.payload, "Assistant", 2_000);
+    case "verification_result":
+      return formatVerificationResult(event.payload);
+    case "tool_settlement":
+      return formatToolSettlement(event.payload, maxToolOutputCharacters);
+    case "tool_result":
+      return formatToolResult(event.payload, maxToolOutputCharacters);
+    case "provider_error":
+      return formatProviderError(event.payload);
+    case "interruption":
+      return formatInterruption(event.payload);
+    case "proposed_patch":
+      return formatProposedPatch(event.payload);
     default:
       return [];
   }
+}
+
+function formatContentEvent(payloadValue: unknown, label: string, maxCharacters: number): string[] {
+  const payload = payloadValue as { content?: unknown };
+
+  return typeof payload.content === "string"
+    ? [`${label}: ${truncateTail(payload.content, maxCharacters)}`]
+    : [];
+}
+
+function formatQueuedInput(payloadValue: unknown): string[] {
+  const payload = payloadValue as { content?: unknown; mode?: unknown };
+
+  return typeof payload.content === "string"
+    ? [`Queued ${String(payload.mode ?? "input")}: ${truncateTail(payload.content, 1_000)}`]
+    : [];
+}
+
+function formatVerificationResult(payloadValue: unknown): string[] {
+  const payload = payloadValue as { command?: unknown; status?: unknown; stderr?: unknown };
+  const command = typeof payload.command === "string" ? payload.command : "unknown command";
+  const status = typeof payload.status === "string" ? payload.status : "unknown";
+  const stderr = typeof payload.stderr === "string" && payload.stderr.length > 0;
+
+  return [
+    `Verification: ${command}: ${status}${stderr ? `\nstderr:\n${truncateTail(payload.stderr as string, 1_000)}` : ""}`,
+  ];
+}
+
+function formatToolSettlement(payloadValue: unknown, maxToolOutputCharacters: number): string[] {
+  const payload = payloadValue as {
+    name?: unknown;
+    status?: unknown;
+    outputPreview?: unknown;
+    error?: unknown;
+  };
+  const name = typeof payload.name === "string" ? payload.name : "tool";
+  const status = typeof payload.status === "string" ? payload.status : "unknown";
+  const detail = readEventDetail(payload.error, payload.outputPreview);
+
+  return [formatToolDetail("Tool settlement", name, status, detail, maxToolOutputCharacters)];
+}
+
+function formatToolResult(payloadValue: unknown, maxToolOutputCharacters: number): string[] {
+  const payload = payloadValue as {
+    name?: unknown;
+    ok?: unknown;
+    output?: unknown;
+    error?: unknown;
+  };
+  const name = typeof payload.name === "string" ? payload.name : "tool";
+  const status = payload.ok === true ? "ok" : "failed";
+  const detail = readEventDetail(payload.error, payload.output);
+
+  return [formatToolDetail("Tool result", name, status, detail, maxToolOutputCharacters)];
+}
+
+function readEventDetail(error: unknown, output: unknown): string {
+  if (typeof error === "string" && error.length > 0) return error;
+  return typeof output === "string" ? output : "";
+}
+
+function formatToolDetail(
+  label: string,
+  name: string,
+  status: string,
+  detail: string,
+  maxCharacters: number,
+): string {
+  return `${label}: ${name}: ${status}${detail ? `\n${truncateTail(detail, maxCharacters)}` : ""}`;
+}
+
+function formatProviderError(payloadValue: unknown): string[] {
+  const payload = payloadValue as { message?: unknown };
+
+  return typeof payload.message === "string"
+    ? [`Provider error: ${truncateTail(payload.message, 1_000)}`]
+    : [];
+}
+
+function formatInterruption(payloadValue: unknown): string[] {
+  const payload = payloadValue as { reason?: unknown };
+
+  return [`Interrupted: ${String(payload.reason ?? "unknown")}`];
+}
+
+function formatProposedPatch(payloadValue: unknown): string[] {
+  const payload = payloadValue as { summary?: unknown };
+
+  return typeof payload.summary === "string" ? [`Proposed patch: ${payload.summary}`] : [];
 }
 
 function truncateTail(value: string, maxCharacters: number): string {

@@ -20,8 +20,11 @@ export function validateAgentAction(value: unknown): AgentAction {
   }
 
   const action = value as Record<string, unknown>;
-  const type = readString(action, "type");
 
+  return readActionByType(action, readString(action, "type"));
+}
+
+function readActionByType(action: Record<string, unknown>, type: string): AgentAction {
   switch (type) {
     case "answer":
       return { type, content: readString(action, "content") };

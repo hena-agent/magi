@@ -1,7 +1,8 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, jsonSchema, streamText } from "ai";
+import { generateText, streamText } from "ai";
 import { OAUTH_DUMMY_KEY } from "./auth.js";
 import { listEffectiveModelProviders, type ModelProviderSettings } from "./model-catalog.js";
+import { formatToolCalls, formatToolDefinitions } from "./model-tools.js";
 import { createOpenAICodexOAuthFetch, isOpenAICodexOAuthModel } from "./openai-codex-oauth.js";
 import type { ToolCall, ToolName } from "./tools.js";
 
@@ -10,6 +11,13 @@ type ModelAdapterConfig = {
   selectedProviderId?: string;
   sessionId?: string;
   modelProviders: ModelProviderSettings[];
+};
+
+type AdapterRuntime = {
+  providerConfig: ModelProviderSettings;
+  model: ReturnType<ReturnType<typeof createOpenAI>>;
+  baseURL?: string;
+  isOAuth: boolean;
 };
 
 export type PrimaryModelAdapter = {
@@ -89,112 +97,124 @@ export function createPrimaryModelAdapter(config: ModelAdapterConfig): PrimaryMo
       : {}),
     ...(shouldUseChatCompletions(providerConfig.provider) ? { name: providerConfig.provider } : {}),
   });
-  const model = selectLanguageModel(provider, providerConfig);
+  const runtime: AdapterRuntime = {
+    providerConfig,
+    model: selectLanguageModel(provider, providerConfig),
+    ...(baseURL === undefined ? {} : { baseURL }),
+    isOAuth,
+  };
 
   return {
-    provider: {
-      id: providerConfig.id,
-      provider: providerConfig.provider,
-      model: providerConfig.model,
-      ...(providerConfig.auth === undefined ? {} : { auth: providerConfig.auth }),
-    },
+    provider: selectedProviderFromConfig(providerConfig),
     async generateText(input) {
-      try {
-        if (isOAuth) {
-          const result = streamText({
-            model,
-            providerOptions: {
-              openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
-            },
-            prompt: input.prompt,
-          });
-
-          return { text: await result.text };
-        }
-
-        const result = await generateText({
-          model,
-          system: input.system ?? defaultSystemPrompt,
-          prompt: input.prompt,
-        });
-
-        return { text: result.text };
-      } catch (error) {
-        throw new Error(
-          `Model call failed for provider ${providerConfig.id} (${providerConfig.provider}, model ${providerConfig.model}${baseURL === undefined ? "" : `, baseUrl ${baseURL}`}): ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+      return generateAdapterText(runtime, input);
     },
     async generateStep(input) {
-      try {
-        if (isOAuth) {
-          const result = streamText({
-            model,
-            providerOptions: {
-              openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
-            },
-            prompt: formatModelMessages(input.messages),
-            tools: Object.fromEntries(
-              input.tools.map((toolDefinition) => [
-                toolDefinition.name,
-                {
-                  description: toolDefinition.description,
-                  inputSchema: jsonSchema(toolDefinition.inputSchema),
-                },
-              ]),
-            ),
-            toolChoice: input.toolChoice ?? "auto",
-          });
-          const toolCalls = await result.toolCalls;
-          const finalStep = await result.finalStep;
-
-          return {
-            text: await result.text,
-            toolCalls: toolCalls.flatMap((toolCall) => {
-              const name = String(toolCall.toolName);
-
-              return isToolName(name)
-                ? [{ id: toolCall.toolCallId, name, input: toolCall.input }]
-                : [];
-            }),
-            finishReason: finalStep.finishReason,
-          };
-        }
-
-        const result = await generateText({
-          model,
-          system: input.system ?? defaultSystemPrompt,
-          prompt: formatModelMessages(input.messages),
-          tools: Object.fromEntries(
-            input.tools.map((toolDefinition) => [
-              toolDefinition.name,
-              {
-                description: toolDefinition.description,
-                inputSchema: jsonSchema(toolDefinition.inputSchema),
-              },
-            ]),
-          ),
-          toolChoice: input.toolChoice ?? "auto",
-        });
-
-        return {
-          text: result.text,
-          toolCalls: result.toolCalls.flatMap((toolCall) => {
-            const name = String(toolCall.toolName);
-
-            return isToolName(name)
-              ? [{ id: toolCall.toolCallId, name, input: toolCall.input }]
-              : [];
-          }),
-          finishReason: result.finishReason,
-        };
-      } catch (error) {
-        throw new Error(
-          `Native tool-call model step failed for provider ${providerConfig.id}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+      return generateAdapterStep(runtime, input);
     },
   };
+}
+
+function selectedProviderFromConfig(providerConfig: ModelProviderSettings): SelectedModelProvider {
+  return {
+    id: providerConfig.id,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    ...(providerConfig.auth === undefined ? {} : { auth: providerConfig.auth }),
+  };
+}
+
+async function generateAdapterText(
+  runtime: AdapterRuntime,
+  input: { system?: string; prompt: string },
+): Promise<{ text: string }> {
+  try {
+    if (runtime.isOAuth) {
+      const result = streamText({
+        model: runtime.model,
+        providerOptions: {
+          openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
+        },
+        prompt: input.prompt,
+      });
+
+      return { text: await result.text };
+    }
+
+    const result = await generateText({
+      model: runtime.model,
+      system: input.system ?? defaultSystemPrompt,
+      prompt: input.prompt,
+    });
+
+    return { text: result.text };
+  } catch (error) {
+    throwModelCallError(runtime, error);
+  }
+}
+
+async function generateAdapterStep(
+  runtime: AdapterRuntime,
+  input: Parameters<NonNullable<PrimaryModelAdapter["generateStep"]>>[0],
+): Promise<ModelStepResponse> {
+  try {
+    return runtime.isOAuth
+      ? await generateOAuthStep(runtime, input)
+      : await generateChatStep(runtime, input);
+  } catch (error) {
+    throw new Error(
+      `Native tool-call model step failed for provider ${runtime.providerConfig.id}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function generateOAuthStep(
+  runtime: AdapterRuntime,
+  input: Parameters<NonNullable<PrimaryModelAdapter["generateStep"]>>[0],
+): Promise<ModelStepResponse> {
+  const result = streamText({
+    model: runtime.model,
+    providerOptions: {
+      openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
+    },
+    prompt: formatModelMessages(input.messages),
+    tools: formatToolDefinitions(input.tools),
+    toolChoice: input.toolChoice ?? "auto",
+  });
+  const toolCalls = await result.toolCalls;
+  const finalStep = await result.finalStep;
+
+  return {
+    text: await result.text,
+    toolCalls: formatToolCalls(toolCalls),
+    finishReason: finalStep.finishReason,
+  };
+}
+
+async function generateChatStep(
+  runtime: AdapterRuntime,
+  input: Parameters<NonNullable<PrimaryModelAdapter["generateStep"]>>[0],
+): Promise<ModelStepResponse> {
+  const result = await generateText({
+    model: runtime.model,
+    system: input.system ?? defaultSystemPrompt,
+    prompt: formatModelMessages(input.messages),
+    tools: formatToolDefinitions(input.tools),
+    toolChoice: input.toolChoice ?? "auto",
+  });
+
+  return {
+    text: result.text,
+    toolCalls: formatToolCalls(result.toolCalls),
+    finishReason: result.finishReason,
+  };
+}
+
+function throwModelCallError(runtime: AdapterRuntime, error: unknown): never {
+  const { providerConfig, baseURL } = runtime;
+  throw new Error(
+    `Model call failed for provider ${providerConfig.id} (${providerConfig.provider}, model ${providerConfig.model}${baseURL === undefined ? "" : `, baseUrl ${baseURL}`}): ${error instanceof Error ? error.message : String(error)}`,
+  );
 }
 
 function selectProviderConfig(config: ModelAdapterConfig): ModelProviderSettings {
@@ -242,18 +262,6 @@ function formatModelMessages(messages: ModelMessage[]): string {
         `${message.role}${message.toolCallId ? `(${message.toolCallId})` : ""}: ${message.content}`,
     )
     .join("\n\n");
-}
-
-function isToolName(value: string): value is ToolName {
-  return (
-    value === "read" ||
-    value === "glob" ||
-    value === "grep" ||
-    value === "edit" ||
-    value === "write" ||
-    value === "apply_patch" ||
-    value === "bash"
-  );
 }
 
 function isOpenAICompatibleProvider(provider: ModelProviderSettings["provider"]): boolean {
