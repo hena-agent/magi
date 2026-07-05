@@ -721,7 +721,9 @@ export function AppController() {
       case "skill":
         return await executeToolAction(createToolCall("skill", { name: action.name }), agent);
       case "task":
-        return await runForegroundTask(action, agent, providerId);
+        return action.background === true
+          ? runBackgroundTask(action, agent, providerId)
+          : await runForegroundTask(action, agent, providerId);
       case "plan_exit":
         return await runPlanExit(agent);
       case "verify":
@@ -739,6 +741,8 @@ export function AppController() {
           agent,
         );
       }
+      case "invalid_tool":
+        return `Invalid native tool call: ${action.toolName}\nReason: ${action.reason}`;
     }
   }
 
@@ -839,6 +843,275 @@ export function AppController() {
       result.finalText,
       "</task>",
     ].join("\n");
+  }
+
+  function runBackgroundTask(
+    action: Extract<ExecutableAgentAction, { type: "task" }>,
+    parentAgent: AgentInfo,
+    providerId: string | undefined,
+  ): string {
+    if (!session) {
+      return "task denied: background tasks require a saved session. Run a normal prompt first or use foreground task mode.";
+    }
+
+    if (parentAgent.id === "plan" && action.subagent_type !== "explore") {
+      return "task denied: plan agent may only launch explore subagents.";
+    }
+
+    const subagent = getAgent(action.subagent_type);
+
+    if (!subagent || subagent.mode === "primary") {
+      return `task failed: unknown subagent type ${action.subagent_type}`;
+    }
+
+    const taskId = action.task_id ?? crypto.randomUUID();
+    const targetSessionId = session.id;
+    const startedAt = new Date().toISOString();
+    store.appendEvent({
+      sessionId: targetSessionId,
+      type: "task_update",
+      payload: {
+        taskId,
+        status: "started",
+        description: action.description,
+        subagentId: subagent.id,
+        parentAgentId: parentAgent.id,
+        providerId,
+        startedAt,
+      },
+    });
+    addMessage(`task background started: ${action.description} (${subagent.id}, ${taskId})`);
+
+    void runBackgroundTaskToCompletion({
+      action,
+      parentAgent,
+      providerId,
+      subagent,
+      targetSessionId,
+      taskId,
+      startedAt,
+    });
+
+    return [
+      `<task id="${taskId}" state="running" background="true">`,
+      `<summary>${action.description}</summary>`,
+      "Background task started. Its completion will be recorded in session history.",
+      "</task>",
+    ].join("\n");
+  }
+
+  async function runBackgroundTaskToCompletion(input: {
+    action: Extract<ExecutableAgentAction, { type: "task" }>;
+    parentAgent: AgentInfo;
+    providerId: string | undefined;
+    subagent: AgentInfo;
+    targetSessionId: string;
+    taskId: string;
+    startedAt: string;
+  }): Promise<void> {
+    try {
+      const adapter = createPrimaryModelAdapter({
+        ...config,
+        selectedProviderId: input.providerId,
+        sessionId: providerSessionIdRef.current,
+      });
+      const sessionContext = buildAgentSessionContext({
+        events: store.listEvents(input.targetSessionId),
+      });
+      const systemContext = buildAgentSystemContext({ workspaceRoot: config.workspaceRoot });
+      const result = await runAgentTurn({
+        engine: adapter,
+        agent: input.subagent,
+        userMessage: input.action.prompt,
+        systemContext,
+        sessionContext,
+        shouldInterrupt() {
+          return false;
+        },
+        onEvent(event) {
+          appendAgentTurnEventToSession(event, input.subagent, input.targetSessionId, input.taskId);
+        },
+        async executeAction(childAction) {
+          if (childAction.type === "task") {
+            return "Nested task calls are disabled for background subagents.";
+          }
+
+          return await executeBackgroundAgentAction(
+            childAction,
+            input.subagent,
+            input.targetSessionId,
+          );
+        },
+      });
+      const endedAt = new Date().toISOString();
+      store.appendEvent({
+        sessionId: input.targetSessionId,
+        type: "task_update",
+        payload: {
+          taskId: input.taskId,
+          status: result.status === "completed" ? "completed" : "failed",
+          description: input.action.description,
+          subagentId: input.subagent.id,
+          parentAgentId: input.parentAgent.id,
+          startedAt: input.startedAt,
+          endedAt,
+          finalText: result.finalText,
+        },
+      });
+      addMessage(`task background ${result.status}: ${input.action.description} (${input.taskId})`);
+    } catch (error) {
+      const endedAt = new Date().toISOString();
+      store.appendEvent({
+        sessionId: input.targetSessionId,
+        type: "task_update",
+        payload: {
+          taskId: input.taskId,
+          status: "failed",
+          description: input.action.description,
+          subagentId: input.subagent.id,
+          parentAgentId: input.parentAgent.id,
+          startedAt: input.startedAt,
+          endedAt,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      addMessage(`task background failed: ${input.action.description} (${input.taskId})`);
+    }
+  }
+
+  async function executeBackgroundAgentAction(
+    action: ExecutableAgentAction,
+    agent: AgentInfo,
+    targetSessionId: string,
+  ): Promise<string> {
+    const call = createToolCallForExecutableAction(action);
+
+    if (!call) {
+      return `${action.type} is not available in background tasks.`;
+    }
+
+    const result = await runBackgroundToolCall(call, agent, targetSessionId);
+
+    return result ? toolResultToObservation(result) : `${call.name} did not run.`;
+  }
+
+  function createToolCallForExecutableAction(action: ExecutableAgentAction): ToolCall | undefined {
+    switch (action.type) {
+      case "read":
+        return createToolCall("read", { path: action.path });
+      case "glob":
+        return createToolCall("glob", { pattern: action.pattern });
+      case "grep":
+        return createToolCall("grep", {
+          pattern: action.pattern,
+          ...(action.include === undefined ? {} : { include: action.include }),
+        });
+      case "edit":
+        return createToolCall("edit", {
+          filePath: action.filePath,
+          oldString: action.oldString,
+          newString: action.newString,
+          ...(action.replaceAll === undefined ? {} : { replaceAll: action.replaceAll }),
+        });
+      case "write":
+        return createToolCall("write", { filePath: action.filePath, content: action.content });
+      case "apply_patch":
+        return createToolCall("apply_patch", { patchText: action.patchText });
+      case "webfetch":
+        return createToolCall("webfetch", {
+          url: action.url,
+          ...(action.format === undefined ? {} : { format: action.format }),
+          ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
+        });
+      case "todowrite":
+        return createToolCall("todowrite", { todos: action.todos });
+      case "skill":
+        return createToolCall("skill", { name: action.name });
+      case "verify":
+        return createToolCall("bash", { command: action.command ?? "" });
+      case "question":
+      case "task":
+      case "plan_exit":
+      case "propose_patch":
+      case "invalid_tool":
+        return undefined;
+    }
+  }
+
+  async function runBackgroundToolCall(
+    call: ToolCall,
+    agent: AgentInfo,
+    targetSessionId: string,
+  ): Promise<ToolResult | undefined> {
+    const permission = getToolPermission(call.name);
+    const policy = mergeAgentPermission(agent, config.permissions)[permission];
+    store.appendEvent({
+      sessionId: targetSessionId,
+      type: "tool_settlement",
+      payload: { ...createToolSettlement({ call, status: "pending" }), agentId: agent.id },
+    });
+
+    if (policy !== "allow") {
+      store.appendEvent({
+        sessionId: targetSessionId,
+        type: "permission_decision",
+        payload: { toolCallId: call.id, action: permission, decision: "deny", background: true },
+      });
+      store.appendEvent({
+        sessionId: targetSessionId,
+        type: "tool_settlement",
+        payload: {
+          ...createToolSettlement({ call, status: "denied", endedAt: new Date().toISOString() }),
+          agentId: agent.id,
+        },
+      });
+
+      return;
+    }
+
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    store.appendEvent({ sessionId: targetSessionId, type: "tool_call", payload: call });
+    store.appendEvent({
+      sessionId: targetSessionId,
+      type: "tool_settlement",
+      payload: {
+        ...createToolSettlement({ call, status: "running", startedAt }),
+        agentId: agent.id,
+      },
+    });
+
+    const result = await runTool(call, { workspaceRoot: config.workspaceRoot });
+    if (result.ok && call.name === "todowrite") {
+      const nextTodos = readTodosFromToolInput(call.input);
+      store.appendEvent({
+        sessionId: targetSessionId,
+        type: "todo_update",
+        payload: { todos: nextTodos, background: true },
+      });
+      if (session?.id === targetSessionId) {
+        setTodos(nextTodos);
+      }
+    }
+    store.appendEvent({ sessionId: targetSessionId, type: "tool_result", payload: result });
+    store.appendEvent({
+      sessionId: targetSessionId,
+      type: "tool_settlement",
+      payload: {
+        ...createToolSettlement({
+          call,
+          status: result.ok ? "succeeded" : "failed",
+          startedAt,
+          endedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          result,
+        }),
+        agentId: agent.id,
+      },
+    });
+    addMessage(formatToolResultMessage(result, call.input));
+
+    return result;
   }
 
   async function executeToolAction(
@@ -1690,6 +1963,19 @@ export function AppController() {
     });
   }
 
+  function appendAgentTurnEventToSession(
+    event: AgentTurnEvent,
+    agent: AgentInfo,
+    targetSessionId: string,
+    taskId: string,
+  ): void {
+    store.appendEvent({
+      sessionId: targetSessionId,
+      type: event.type,
+      payload: { ...event.payload, agentId: agent.id, taskId, background: true },
+    });
+  }
+
   function getSessionDisplayTitle(listedSession: Session, events: SessionEvent[]): string {
     if (listedSession.title !== undefined && listedSession.title !== defaultSessionTitle) {
       return listedSession.title;
@@ -2012,6 +2298,19 @@ function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): 
 
         return [{ id: event.id, content: `todos: ${countOpenTodos(todos)} open` }];
       }
+      case "task_update": {
+        const payload = event.payload as {
+          description?: unknown;
+          status?: unknown;
+          taskId?: unknown;
+        };
+        const status = typeof payload.status === "string" ? payload.status : "unknown";
+        const description =
+          typeof payload.description === "string" ? truncateOneLine(payload.description) : "task";
+        const taskId = typeof payload.taskId === "string" ? ` (${payload.taskId})` : "";
+
+        return [{ id: event.id, content: `task: ${status}: ${description}${taskId}` }];
+      }
       case "plan_exit": {
         const payload = event.payload as { accepted?: unknown; planPath?: unknown };
 
@@ -2120,6 +2419,19 @@ function formatEventPayload(event: SessionEvent): string {
     }
     case "todo_update":
       return `${countOpenTodos(readTodosFromPayload(event.payload))} open`;
+    case "task_update": {
+      const payload = event.payload as {
+        description?: unknown;
+        status?: unknown;
+        error?: unknown;
+      };
+      const status = typeof payload.status === "string" ? payload.status : "unknown";
+      const description =
+        typeof payload.description === "string" ? truncateOneLine(payload.description) : "task";
+      const error = typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : "";
+
+      return `${status}: ${description}${error}`;
+    }
     case "plan_exit": {
       const payload = event.payload as { accepted?: unknown; planPath?: unknown };
 
