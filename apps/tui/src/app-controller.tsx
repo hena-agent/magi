@@ -27,6 +27,8 @@ import {
   listAgents,
   loginOpenAICodexBrowser,
   loginOpenAICodexHeadless,
+  MAGI_BUILD_SWITCH_REMINDER,
+  MAGI_PLAN_MODE_PROMPT,
   mergeAgentPermission,
   planSessionMaintenance,
   refreshOpenAICodexAuth,
@@ -60,6 +62,30 @@ export type PendingPermission = {
   call: ToolCall;
   description: string;
   resolve: (allow: boolean) => void;
+};
+
+export type QuestionOption = {
+  label: string;
+  description: string;
+};
+
+export type QuestionPrompt = {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiple: boolean;
+};
+
+export type PendingQuestion = {
+  call: ToolCall;
+  questions: QuestionPrompt[];
+  resolve: (answer: string | undefined) => void;
+};
+
+export type TodoItem = {
+  content: string;
+  status: string;
+  priority: string;
 };
 
 type DraftSessionEvent = Omit<SessionEvent, "sessionId">;
@@ -122,6 +148,10 @@ const slashCommands: SlashCommandInfo[] = [
   { name: "read", usage: "/read <path>", description: "Read a workspace file" },
   { name: "glob", usage: "/glob <pattern>", description: "List files matching a glob" },
   { name: "grep", usage: "/grep <pattern> [include]", description: "Search workspace files" },
+  { name: "webfetch", usage: "/webfetch <url> [format]", description: "Fetch web content" },
+  { name: "todowrite", usage: "/todowrite <json>", description: "Update session todo list" },
+  { name: "question", usage: "/question <json>", description: "Ask structured questions" },
+  { name: "skill", usage: "/skill <name>", description: "Load a named skill" },
   { name: "bash", usage: "/bash <command>", description: "Run a shell command with permission" },
   { name: "apply_patch", usage: "/apply_patch <patch-file>", description: "Apply a patch file" },
   {
@@ -207,15 +237,40 @@ export function AppController() {
       : sessionEventsToDisplayMessages(store.listEvents(initialSession.session.id), 30)),
   ]);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
+  const [questionAnswer, setQuestionAnswer] = useState("");
+  const [todos, setTodos] = useState<TodoItem[]>(() =>
+    getLatestTodos(initialSession.session ? store.listEvents(initialSession.session.id) : []),
+  );
   const [busyDepth, setBusyDepth] = useState(0);
   const isBusy = busyDepth > 0;
-  const slashCommandSuggestions = pendingPermission ? [] : getSlashCommandSuggestions(prompt);
+  const slashCommandSuggestions =
+    pendingPermission || pendingQuestion ? [] : getSlashCommandSuggestions(prompt);
 
   function getEffectiveProviders(): EffectiveModelProvider[] {
     return listEffectiveModelProviders({
       configProviders: config.modelProviders,
       workspaceRoot: config.workspaceRoot,
     });
+  }
+
+  function getPlanFilePath(): string {
+    return `.magi/plans/${session?.id ?? providerSessionIdRef.current}.md`;
+  }
+
+  function isPlanFilePath(filePath: string): boolean {
+    return filePath === getPlanFilePath();
+  }
+
+  function addAgentModeReminders(content: string, agent: AgentInfo): string {
+    if (agent.id !== "plan") {
+      return content;
+    }
+
+    const planPath = getPlanFilePath();
+    const planInfo = `No plan file exists yet. You should create your plan at ${planPath} using the write tool.`;
+
+    return [content, "", MAGI_PLAN_MODE_PROMPT.replace("$" + "{planInfo}", planInfo)].join("\n");
   }
 
   useEffect(() => {
@@ -231,6 +286,29 @@ export function AppController() {
           void resolvePermission(true);
         } else if (input.toLowerCase() === "n" || key.escape) {
           void resolvePermission(false);
+        }
+
+        return;
+      }
+
+      if (pendingQuestion) {
+        if (key.escape) {
+          resolveQuestion(undefined);
+          return;
+        }
+
+        if (key.return) {
+          resolveQuestion(questionAnswer.trim().length === 0 ? undefined : questionAnswer.trim());
+          return;
+        }
+
+        if (key.backspace || key.delete) {
+          setQuestionAnswer((currentAnswer) => currentAnswer.slice(0, -1));
+          return;
+        }
+
+        if (input.length > 0 && !key.ctrl && !key.meta) {
+          setQuestionAnswer((currentAnswer) => currentAnswer + input);
         }
 
         return;
@@ -518,6 +596,7 @@ export function AppController() {
         steeringInputs.length === 0
           ? content
           : `${content}\n\nSteering input for this run:\n${steeringInputs.map((input) => `- ${input}`).join("\n")}`;
+      const agentContent = addAgentModeReminders(effectiveContent, agent);
       const sessionContext = buildAgentSessionContext({
         events: getCurrentSessionEvents().slice(0, -1),
       });
@@ -525,7 +604,7 @@ export function AppController() {
       const result = await runAgentTurn({
         engine: adapter,
         agent,
-        userMessage: effectiveContent,
+        userMessage: agentContent,
         systemContext,
         sessionContext,
         shouldInterrupt() {
@@ -535,7 +614,7 @@ export function AppController() {
           appendAgentTurnEvent(event, agent);
         },
         async executeAction(action) {
-          return await executeAgentAction(action, agent);
+          return await executeAgentAction(action, agent, providerId);
         },
       });
       const event = appendSessionEvent({
@@ -565,6 +644,7 @@ export function AppController() {
   async function executeAgentAction(
     action: ExecutableAgentAction,
     agent: AgentInfo,
+    providerId: string | undefined = activeProviderId,
   ): Promise<string> {
     switch (action.type) {
       case "read":
@@ -580,6 +660,20 @@ export function AppController() {
           agent,
         );
       case "edit":
+        if (agent.id === "plan" && isPlanFilePath(action.filePath)) {
+          return toolResultToObservation(
+            await executeToolCall(
+              createToolCall("edit", {
+                filePath: action.filePath,
+                oldString: action.oldString,
+                newString: action.newString,
+                ...(action.replaceAll === undefined ? {} : { replaceAll: action.replaceAll }),
+              }),
+              agent,
+            ),
+          );
+        }
+
         return await executeToolAction(
           createToolCall("edit", {
             filePath: action.filePath,
@@ -590,6 +684,15 @@ export function AppController() {
           agent,
         );
       case "write":
+        if (agent.id === "plan" && isPlanFilePath(action.filePath)) {
+          return toolResultToObservation(
+            await executeToolCall(
+              createToolCall("write", { filePath: action.filePath, content: action.content }),
+              agent,
+            ),
+          );
+        }
+
         return await executeToolAction(
           createToolCall("write", { filePath: action.filePath, content: action.content }),
           agent,
@@ -599,6 +702,28 @@ export function AppController() {
           createToolCall("apply_patch", { patchText: action.patchText }),
           agent,
         );
+      case "webfetch":
+        return await executeToolAction(
+          createToolCall("webfetch", {
+            url: action.url,
+            ...(action.format === undefined ? {} : { format: action.format }),
+            ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
+          }),
+          agent,
+        );
+      case "todowrite":
+        return await executeToolAction(createToolCall("todowrite", { todos: action.todos }), agent);
+      case "question":
+        return await executeToolAction(
+          createToolCall("question", { questions: action.questions }),
+          agent,
+        );
+      case "skill":
+        return await executeToolAction(createToolCall("skill", { name: action.name }), agent);
+      case "task":
+        return await runForegroundTask(action, agent, providerId);
+      case "plan_exit":
+        return await runPlanExit(agent);
       case "verify":
         return await runVerification(action.command ?? "", agent);
       case "propose_patch": {
@@ -617,6 +742,105 @@ export function AppController() {
     }
   }
 
+  async function runPlanExit(agent: AgentInfo): Promise<string> {
+    if (agent.id !== "plan") {
+      return "plan_exit ignored: active agent is not plan.";
+    }
+
+    const planPath = getPlanFilePath();
+    const answer = await new Promise<string | undefined>((resolve) => {
+      setQuestionAnswer("");
+      setPendingQuestion({
+        call: createToolCall("question", { source: "plan_exit" }),
+        questions: [
+          {
+            question: `Plan at ${planPath} is complete. Would you like to switch to the build agent and start implementing?`,
+            header: "Build Agent",
+            multiple: false,
+            options: [
+              {
+                label: "Yes",
+                description: "Switch to build agent and start implementing the plan",
+              },
+              { label: "No", description: "Stay with plan agent to continue refining the plan" },
+            ],
+          },
+        ],
+        resolve,
+      });
+    });
+    const accepted = answer?.trim() === "1" || answer?.toLowerCase() === "yes";
+    appendSessionEvent({
+      type: "plan_exit",
+      payload: { planPath, accepted, answer: answer ?? "Unanswered" },
+    });
+
+    if (accepted) {
+      const build = getAgent("build");
+      if (build) setActiveAgent(build);
+      return [
+        "Plan approved. Switched agent: build.",
+        MAGI_BUILD_SWITCH_REMINDER,
+        `Plan file: ${planPath}`,
+      ].join("\n\n");
+    }
+
+    return `Plan remains active. Continue refining ${planPath}.`;
+  }
+
+  async function runForegroundTask(
+    action: Extract<ExecutableAgentAction, { type: "task" }>,
+    parentAgent: AgentInfo,
+    providerId: string | undefined,
+  ): Promise<string> {
+    if (parentAgent.id === "plan" && action.subagent_type !== "explore") {
+      return "task denied: plan agent may only launch explore subagents.";
+    }
+
+    const subagent = getAgent(action.subagent_type);
+
+    if (!subagent || subagent.mode === "primary") {
+      return `task failed: unknown subagent type ${action.subagent_type}`;
+    }
+
+    addMessage(`task: ${action.description} (${subagent.id})`);
+
+    const adapter = createPrimaryModelAdapter({
+      ...config,
+      selectedProviderId: providerId,
+      sessionId: providerSessionIdRef.current,
+    });
+    const sessionContext = buildAgentSessionContext({ events: getCurrentSessionEvents() });
+    const systemContext = buildAgentSystemContext({ workspaceRoot: config.workspaceRoot });
+    const result = await runAgentTurn({
+      engine: adapter,
+      agent: subagent,
+      userMessage: action.prompt,
+      systemContext,
+      sessionContext,
+      shouldInterrupt() {
+        return interruptionRequestedRef.current;
+      },
+      onEvent(event) {
+        appendAgentTurnEvent(event, subagent);
+      },
+      async executeAction(childAction) {
+        if (childAction.type === "task") {
+          return "Nested task calls are disabled for foreground subagents.";
+        }
+
+        return await executeAgentAction(childAction, subagent, providerId);
+      },
+    });
+
+    return [
+      `<task id="${action.task_id ?? crypto.randomUUID()}" state="${result.status === "completed" ? "completed" : "error"}">`,
+      `<summary>${action.description}</summary>`,
+      result.finalText,
+      "</task>",
+    ].join("\n");
+  }
+
   async function executeToolAction(
     call: ToolCall,
     agent: AgentInfo = activeAgent,
@@ -627,6 +851,10 @@ export function AppController() {
       return `${call.name} did not run.`;
     }
 
+    return toolResultToObservation(result);
+  }
+
+  function toolResultToObservation(result: ToolResult): string {
     return result.ok ? result.output || "ok" : `failed: ${result.error}`;
   }
 
@@ -705,6 +933,14 @@ export function AppController() {
     pendingPermission.resolve(allow);
   }
 
+  function resolveQuestion(answer: string | undefined): void {
+    if (!pendingQuestion) {
+      return;
+    }
+
+    pendingQuestion.resolve(answer);
+  }
+
   async function executeToolCall(
     call: ToolCall,
     agent: AgentInfo = activeAgent,
@@ -722,7 +958,15 @@ export function AppController() {
     });
 
     try {
-      const result = await runTool(call, { workspaceRoot: config.workspaceRoot });
+      const result =
+        call.name === "question"
+          ? await runInteractiveQuestionTool(call)
+          : await runTool(call, { workspaceRoot: config.workspaceRoot });
+      if (result.ok && call.name === "todowrite") {
+        const nextTodos = readTodosFromToolInput(call.input);
+        setTodos(nextTodos);
+        appendSessionEvent({ type: "todo_update", payload: { todos: nextTodos } });
+      }
       appendSessionEvent({ type: "tool_result", payload: result });
       appendSessionEvent({
         type: "tool_settlement",
@@ -742,6 +986,35 @@ export function AppController() {
       return result;
     } finally {
       endBusy();
+    }
+  }
+
+  async function runInteractiveQuestionTool(call: ToolCall): Promise<ToolResult> {
+    try {
+      const questions = readQuestionPrompts(call.input);
+      const answer = await new Promise<string | undefined>((resolve) => {
+        setQuestionAnswer("");
+        setPendingQuestion({ call, questions, resolve });
+        addMessage("question: waiting for user answer");
+      });
+
+      return {
+        id: call.id,
+        name: call.name,
+        ok: true,
+        output: formatQuestionAnswerOutput(questions, answer),
+      };
+    } catch (error) {
+      return {
+        id: call.id,
+        name: call.name,
+        ok: false,
+        output: "",
+        error: formatError(error),
+      };
+    } finally {
+      setPendingQuestion(undefined);
+      setQuestionAnswer("");
     }
   }
 
@@ -960,11 +1233,13 @@ export function AppController() {
       return;
     }
 
+    const selectedEvents = store.listEvents(selectedSession.id);
     setSession(selectedSession);
     providerSessionIdRef.current = selectedSession.id;
+    setTodos(getLatestTodos(selectedEvents));
     setActiveProviderId(
       getLatestModelSelection({
-        events: store.listEvents(selectedSession.id),
+        events: selectedEvents,
         modelProviders: getEffectiveModelProviderSummaries({
           configProviders: config.modelProviders,
           workspaceRoot: config.workspaceRoot,
@@ -976,7 +1251,7 @@ export function AppController() {
         id: crypto.randomUUID(),
         content: `Resumed session: ${selectedSession.id}${selectedSession.title ? ` (${selectedSession.title})` : ""}`,
       },
-      ...sessionEventsToDisplayMessages(store.listEvents(selectedSession.id), 30),
+      ...sessionEventsToDisplayMessages(selectedEvents, 30),
     ]);
   }
 
@@ -991,6 +1266,7 @@ export function AppController() {
       getDefaultModelSelection({ modelProviders: effectiveModelProviders })?.providerId,
     );
     setSession(undefined);
+    setTodos([]);
     setMessages([
       {
         id: crypto.randomUUID(),
@@ -1546,10 +1822,14 @@ export function AppController() {
       messages={messages}
       mode={task.mode}
       pendingPermission={pendingPermission}
+      pendingQuestion={pendingQuestion}
+      planFilePath={activeAgent.id === "plan" ? getPlanFilePath() : undefined}
       prompt={prompt}
+      questionAnswer={questionAnswer}
       riskLevel={task.riskLevel}
       sessionId={session?.id}
       slashCommandSuggestions={slashCommandSuggestions}
+      todoOpenCount={todos.filter((todo) => todo.status !== "completed").length}
       workspaceRoot={config.workspaceRoot}
     />
   );
@@ -1606,6 +1886,24 @@ function parseToolCommand(command: string, rawArgs: string): ToolCall | undefine
     }
     case "apply_patch":
       return createToolCall(command, { patchFile: rawArgs.trim() });
+    case "webfetch": {
+      const [url = "", format] = rawArgs.split(" ");
+
+      return createToolCall(command, {
+        url,
+        ...(format === undefined ? {} : { format }),
+      });
+    }
+    case "todowrite":
+      return createToolCall(command, { todos: JSON.parse(rawArgs) as unknown });
+    case "question":
+      return createToolCall(command, { questions: JSON.parse(rawArgs) as unknown });
+    case "skill":
+      return createToolCall(command, { name: rawArgs.trim() });
+    case "task":
+      return undefined;
+    case "plan_exit":
+      return undefined;
   }
 }
 
@@ -1709,6 +2007,21 @@ function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): 
           ? [{ id: event.id, content: `model: ${payload.providerId} (${payload.model})` }]
           : [];
       }
+      case "todo_update": {
+        const todos = readTodosFromPayload(event.payload);
+
+        return [{ id: event.id, content: `todos: ${countOpenTodos(todos)} open` }];
+      }
+      case "plan_exit": {
+        const payload = event.payload as { accepted?: unknown; planPath?: unknown };
+
+        return [
+          {
+            id: event.id,
+            content: `plan_exit: ${payload.accepted === true ? "accepted" : "continued"} (${String(payload.planPath ?? "plan")})`,
+          },
+        ];
+      }
       default:
         return [];
     }
@@ -1805,6 +2118,13 @@ function formatEventPayload(event: SessionEvent): string {
 
       return `${String(payload.providerId ?? "unknown")}: ${String(payload.model ?? "unknown")}`;
     }
+    case "todo_update":
+      return `${countOpenTodos(readTodosFromPayload(event.payload))} open`;
+    case "plan_exit": {
+      const payload = event.payload as { accepted?: unknown; planPath?: unknown };
+
+      return `${payload.accepted === true ? "accepted" : "continued"}: ${String(payload.planPath ?? "plan")}`;
+    }
     case "magi_decision_trail":
       return "MAGI decision trail";
   }
@@ -1818,7 +2138,11 @@ function isToolName(value: string): value is ToolName {
     value === "edit" ||
     value === "write" ||
     value === "bash" ||
-    value === "apply_patch"
+    value === "apply_patch" ||
+    value === "webfetch" ||
+    value === "todowrite" ||
+    value === "question" ||
+    value === "skill"
   );
 }
 
@@ -1859,9 +2183,152 @@ function formatToolResultMessage(result: ToolResult, input: unknown): string {
         ? `grep: no matches for ${target}`
         : `grep: ${matches.length} matches for ${target}\n${truncate(matches.join("\n"))}`;
     }
+    case "webfetch": {
+      const url = readInputString(input, "url") ?? "url";
+      return `webfetch: ${url}\n${truncate(output)}`;
+    }
+    case "todowrite":
+      return `todowrite: ${formatOutputSummary(result.output)}`;
+    case "question":
+      return `question:\n${truncate(result.output)}`;
+    case "skill":
+      return `skill:\n${truncate(result.output)}`;
     default:
       return `${result.name}: ${formatOutputSummary(result.output)}`;
   }
+}
+
+function readQuestionPrompts(input: unknown): QuestionPrompt[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("question input must be an object");
+  }
+
+  const questions = (input as Record<string, unknown>).questions;
+
+  if (!Array.isArray(questions) || questions.length === 0) {
+    throw new Error("question input requires non-empty questions array");
+  }
+
+  return questions.map(readQuestionPrompt);
+}
+
+function readTodosFromToolInput(input: unknown): TodoItem[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return [];
+  }
+
+  return readTodos((input as Record<string, unknown>).todos);
+}
+
+function readTodosFromPayload(input: unknown): TodoItem[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return [];
+  }
+
+  return readTodos((input as Record<string, unknown>).todos);
+}
+
+function getLatestTodos(events: SessionEvent[]): TodoItem[] {
+  const event = [...events].reverse().find((candidate) => candidate.type === "todo_update");
+
+  return event ? readTodosFromPayload(event.payload) : [];
+}
+
+function readTodos(value: unknown): TodoItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      return [];
+    }
+
+    const todo = item as Record<string, unknown>;
+    return typeof todo.content === "string" &&
+      typeof todo.status === "string" &&
+      typeof todo.priority === "string"
+      ? [{ content: todo.content, status: todo.status, priority: todo.priority }]
+      : [];
+  });
+}
+
+function countOpenTodos(todos: TodoItem[]): number {
+  return todos.filter((todo) => todo.status !== "completed").length;
+}
+
+function readQuestionPrompt(value: unknown): QuestionPrompt {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("question item must be an object");
+  }
+
+  const input = value as Record<string, unknown>;
+  const question = readRequiredString(input, "question");
+  const header = typeof input.header === "string" ? input.header : "Question";
+  const options = Array.isArray(input.options) ? input.options.map(readQuestionOption) : [];
+
+  return { question, header, options, multiple: input.multiple === true };
+}
+
+function readQuestionOption(value: unknown): QuestionOption {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("question option must be an object");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    label: readRequiredString(input, "label"),
+    description: typeof input.description === "string" ? input.description : "",
+  };
+}
+
+function formatQuestionAnswerOutput(
+  questions: QuestionPrompt[],
+  answer: string | undefined,
+): string {
+  const formatted = questions
+    .map((question) => `"${question.question}"="${formatQuestionAnswer(question, answer)}"`)
+    .join(", ");
+
+  return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`;
+}
+
+function formatQuestionAnswer(question: QuestionPrompt, answer: string | undefined): string {
+  if (!answer) {
+    return "Unanswered";
+  }
+
+  const selected = answer
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .flatMap((part) => resolveQuestionAnswerPart(question, part));
+
+  return selected.length === 0 ? answer : selected.join(", ");
+}
+
+function resolveQuestionAnswerPart(question: QuestionPrompt, answer: string): string[] {
+  const index = Number.parseInt(answer, 10);
+
+  if (Number.isInteger(index) && index >= 1 && index <= question.options.length) {
+    return [question.options[index - 1]?.label ?? answer];
+  }
+
+  const option = question.options.find(
+    (candidate) => candidate.label.toLowerCase() === answer.toLowerCase(),
+  );
+
+  return option ? [option.label] : [];
+}
+
+function readRequiredString(input: Record<string, unknown>, field: string): string {
+  const value = input[field];
+
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+
+  return value;
 }
 
 function formatOutputSummary(output: string): string {
