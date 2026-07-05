@@ -7,8 +7,8 @@
 
 ## Bootstrap MVP
 - Build the smallest terminal agent that can work on this repository.
-- Required: prompt input, model call, file read/search, patch application, shell command execution, verification feedback, and final summary.
-- Not required: rich TUI, daemon, plugin system, multi-engine consensus, sandbox isolation, persistent database, IDE integration, or CI mode.
+- Required: prompt input, model call, file read/search, controlled file edits, patch application, shell command execution, verification feedback, persisted session history, and final summary.
+- Not required: daemon, plugin system, automatic multi-engine consensus in the normal path, sandbox isolation, IDE integration, or CI mode.
 - The bootstrap agent should be good enough to implement the next roadmap phase with human supervision.
 
 ## Target Users
@@ -27,8 +27,10 @@
 - MCP SDK integration for external tool interoperability.
 - Project/session initialization.
 - Repo inspection through file search, content search, and targeted reads.
-- File editing through controlled patch application.
+- File editing through controlled edit/write/patch tools.
 - Shell command execution with permission checks.
+- Network fetch through explicit permission-gated `webfetch` with response metadata and truncation.
+- OpenCode-style planning helpers: persisted todos, interactive questions, skill loading, foreground/background subagents, and plan/build agent workflow.
 - Git-aware workflow that can inspect status/diff/log without destructive defaults.
 - Normal coding loop: plan, edit, run tools, observe failures, revise, summarize.
 - Configurable verification commands once project manifests exist.
@@ -62,11 +64,13 @@
 - Bootstrap success: the assistant can make supervised edits to this repo, run verification, revise from failures, and summarize results.
 - The assistant can complete small local coding tasks end-to-end in Normal Mode.
 - The assistant can run verification commands and revise from failures.
+- The assistant can preserve session state across resumes, including tool settlements, todos, task updates, and compact context summaries.
 - MAGI Mode can evaluate a plan or diff using shared history, dynamic lenses, and structured votes.
 - Every MAGI decision can be reconstructed from saved inputs, logs, reviews, and votes.
 - The core remains portable enough to run from a terminal assistant, local service, or future CI/PR gate.
 
 ## Open Questions
-- Which model providers are supported in the first implementation pass.
 - Whether sandbox execution starts as local Docker only or includes a remote backend later.
-- How much UI is needed beyond a terminal command loop for the first usable build.
+- Which maintained packages should be reused for LSP/repo awareness before implementing a custom tool.
+- Which provider should back initial `websearch`, and how provider-specific result formats should be normalized.
+- How background task results should optionally rejoin an active parent agent loop without corrupting prompt queue semantics.

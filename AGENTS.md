@@ -7,8 +7,9 @@
 - Optimize normal coding flow for responsiveness, but optimize MAGI mode for defect prevention, security, and consensus quality.
 
 ## Bootstrap Priority
-- The first milestone is a rough self-hosting CLI agent that can develop this repo.
-- Defer MAGI consensus, rich TUI work, daemon mode, plugin systems, sandbox isolation, and CI/PR gates until the assistant can read, edit, run commands, fix failures, and summarize changes in this repo.
+- The first milestone is a rough self-hosting CLI agent that can develop this repo; that bootstrap path is now mostly complete through the normal single-engine coding loop.
+- Continue prioritizing Phase 3.5 runner/session/tool parity before deeper multi-engine work.
+- Defer daemon mode, plugin systems, sandbox isolation, and CI/PR gates until LSP/websearch/custom tool boundaries are better understood.
 - Prefer the smallest working loop over architectural completeness.
 
 ## Reference Strategy
@@ -35,6 +36,8 @@
 
 ## Control Flow
 - Normal mode: use a fast primary coding loop of plan, edit, run tools, observe failures, revise, and report.
+- Plan mode: use the `plan` agent for read-only planning. It may write only the exact `.magi/plans/<session-id>.md` plan file, then call `plan_exit` to ask whether to switch to `build`.
+- Subagent tasks: use foreground `task` for blocking research/work and background `task` only when the result can be recorded asynchronously as `task_update` events without blocking the parent loop.
 - MAGI mode Phase 1: select the initiating engine by adaptive weighted roulette.
 - MAGI mode Phase 2: have the initiating engine produce one atomic plan or change set.
 - MAGI mode Phase 3: run build/tests in an isolated sandbox such as Docker when available.

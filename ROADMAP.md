@@ -6,9 +6,9 @@
 - `[~]` In progress or partially done.
 
 ## Current Focus
-- [x] Finish Phase 0 project skeleton so every later feature has a reliable TypeScript, Turbo, lint, test, and dead-code harness.
-- [x] Start Phase 1 only after Phase 0 remaining SDK/config tasks are complete.
-- [x] Do not start MAGI Core until Phase 2 can revise this repo from verification failures.
+- [x] Finish bootstrap self-hosting through Phase 3 MAGI core and Phase 3.5 session/runner parity basics.
+- [~] Finish remaining Phase 3.5 OpenCode-style tool parity before moving deeper into Phase 4 multi-engine support.
+- [ ] Next recommended implementation target: LSP tool support, after committing the current background `task` work.
 
 ## Phase 0: Project Skeleton
 - [x] Initialize pnpm workspace.
@@ -78,13 +78,14 @@
   - [x] Harden `webfetch` toward OpenCode behavior with better markdown conversion, media handling, response truncation metadata, and network permission UX.
   - [x] Add `skill` tool with workspace and user skill discovery, loading, and permission checks.
   - [x] Add foreground `task` tool for `general` and `explore` subagents using the existing agent runner.
-  - [ ] Add background `task` execution after foreground subagent behavior is stable.
+  - [x] Add background `task` execution after foreground subagent behavior is stable.
   - [x] Add `plan_exit` plus OpenCode `plan-mode.txt` workflow, plan file path management, and plan-file-only write exceptions.
   - [ ] Add LSP tool support for document symbols, definitions, references, hover, and call hierarchy.
   - [ ] Add `websearch` with explicit provider selection, API key handling, and network permission prompts.
   - [x] Add internal invalid-tool handling for malformed provider tool calls.
   - [ ] Add plugin/custom tool registry only after sandbox and permission boundaries are designed.
 - [~] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
+  - [x] Add focused tests for native task background flag parsing.
 
 ## Phase 4: Multi-Engine Support
 - [ ] Implement model adapter interface.
@@ -121,9 +122,9 @@
 - [ ] Add team policy configuration for approval thresholds and risk triggers.
 
 ## Product MVP Completion Checklist
-- [ ] A user can run MAGI in a repo and complete a small coding task.
-- [ ] The assistant can edit files through patches and run verification commands.
-- [ ] Failures are captured and used for revision.
+- [x] A user can run MAGI in a repo and complete a small coding task.
+- [x] The assistant can edit files through patches and run verification commands.
+- [x] Failures are captured and used for revision.
 - [ ] MAGI Mode can review a plan or diff with structured reviews and votes.
 - [ ] `PASS`, `DEADLOCK`, `FAIL`, and `REJECT` are handled according to the matrix.
 - [ ] Decision trails are saved with enough detail for human review.

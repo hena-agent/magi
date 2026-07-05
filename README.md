@@ -1,6 +1,6 @@
 # MAGI
 
-MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell that can read files, run simple tools, persist session history, execute verification commands, revise from failures, and summarize changes.
+MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell that can read files, search code, edit through controlled tools, run verification commands, use provider-native tool calls, persist session history, launch subagents, revise from failures, and summarize changes.
 
 MAGI consensus and multi-engine review are intentionally not part of the current bootstrap loop yet. See `ROADMAP.md` for planned phases.
 
@@ -87,11 +87,11 @@ Custom OpenAI-compatible endpoints can use `provider: "custom"` with an explicit
 }
 ```
 
-Plain-language agent prompts require a configured model provider and matching API key environment variable. Slash commands such as `/read`, `/glob`, `/grep`, `/verify`, and `/summary` can be useful without an API key.
+Plain-language agent prompts can use configured API-key providers or the built-in OpenAI Codex OAuth model catalog. Slash commands such as `/read`, `/glob`, `/grep`, `/verify`, and `/summary` can be useful without an API key.
 
 The single-engine agent loop uses `agent.maxIterations` as a step budget. When it reaches the final step, tools are disabled and the model is asked to provide a final answer from the observations gathered so far instead of stopping with a hard error.
 
-MAGI starts in a draft session by default. It creates a saved session only after the first normal prompt receives a successful assistant response. Set `session.startup` to `"resume"` to automatically resume the latest saved session for the current workspace.
+MAGI starts in a draft session by default. It creates a saved session only after the first normal prompt receives a successful assistant response. Set `session.startup` to `"resume"` to automatically resume the latest saved session for the current workspace. Background subagent tasks require a saved session so their lifecycle events cannot be written to the wrong draft.
 
 ## Run MAGI
 
@@ -181,9 +181,18 @@ Inside the TUI:
 
 ```txt
 /help
+/mode
+/auth status
+/auth login openai
+/model
+/model status
+/plan
+/build
 /read ROADMAP.md
 /glob **/*.ts
 /grep Phase ROADMAP.md
+/webfetch https://example.com markdown
+/skill frontend-design
 /bash pnpm test
 /apply_patch path/to/change.patch
 /verify
@@ -199,11 +208,19 @@ Inside the TUI:
 Notes:
 
 - Plain text input runs a single-engine agent turn that can read/search files, run verification, and propose patches.
-- `/read`, `/glob`, and `/grep` are read tools.
+- `/mode` shows the current MAGI mode, active agent, selected model provider, and session.
+- `/auth` manages OpenAI OAuth credentials for built-in Codex-style OpenAI model providers.
+- `/model` lists, switches, resets, and reports effective model providers from config plus built-ins.
+- `/plan` switches to the read-only planning agent. The plan agent can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
+- `/build` switches back to the default build agent.
+- `/read`, `/glob`, `/grep`, `/todowrite`, `/question`, and `/skill` are read/planning tools.
+- `/webfetch` is a network tool. It returns response metadata, markdown/text/html content, JSON pretty-printing, unsupported media notices, and truncation metadata.
 - `/bash` is a shell tool and follows the configured shell permission policy.
 - `/apply_patch` applies a `git apply` compatible patch file and follows the configured write permission policy.
 - `/verify` runs configured verification commands.
 - `/summary` reports changed files, verification results, and residual risk.
+- The agent loop supports provider-native tool calls and JSON fallback actions. Malformed native tool calls are converted into `invalid_tool` observations rather than being silently ignored.
+- The `task` tool can launch foreground `general` and `explore` subagents. It can also launch background tasks with `background: true`; background tasks write `task_update` events and deny prompt-gated permissions instead of blocking on user input.
 - MAGI starts in a draft session by default and saves it only after the first successful normal prompt.
 - `/sessions` lists meaningful saved sessions with display titles, event counts, and IDs; `/sessions all` includes empty and command-only legacy sessions.
 - `/resume <id-or-number>` switches sessions, and `/new` resets to a fresh draft session.
@@ -226,8 +243,8 @@ MAGI stores local session history in:
 .magi/magi.db
 ```
 
-The database is ignored by git. It contains sessions and append-only session events such as user messages, assistant messages, tool calls, permission decisions, verification results, and summaries.
+The database is ignored by git. It contains sessions and append-only session events such as user messages, assistant messages, tool calls, tool settlements, permission decisions, verification results, todo updates, task updates, plan exits, context summaries, and summaries.
 
 ## Current Status
 
-Phase 0 through Phase 3 are complete. The TUI now includes a default single-engine agent turn loop for normal prompts while MAGI consensus remains available as core infrastructure and preview/debug commands.
+Phase 0 through Phase 3 are complete. Phase 3.5 is partially complete: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `skill`, foreground/background `task`, and invalid-tool handling are implemented. Remaining Phase 3.5 work includes LSP support, `websearch`, broader continuation/compaction tests, and custom plugin/tool registry design after sandbox boundaries are clearer.

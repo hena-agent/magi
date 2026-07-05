@@ -8,20 +8,21 @@
 ## Bootstrap Architecture
 - Start with a direct terminal process, not a daemon/server architecture.
 - Use the current Ink TUI only as the bootstrap shell; defer rich terminal UX until the self-hosting agent loop works.
-- Use a simple local session event log before adding durable database storage.
-- Implement a minimal typed tool registry with `read`, `glob`, `grep`, `apply_patch`, `bash`, and optional `todowrite`.
+- Use SQLite-backed append-only session events for persisted sessions, with draft sessions held in memory until the first successful assistant response.
+- Implement a typed tool registry with `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`, `webfetch`, `todowrite`, `question`, `skill`, `task`, and `plan_exit`.
 - Use one primary model adapter first; MAGI multi-engine review comes after the normal coding loop works.
 - Keep interfaces narrow so the bootstrap loop can later be replaced by a richer session runner.
 
 ## Main Components
 - TUI shell: receives user input, streams assistant output, and displays tool activity; richer TUI can come after self-hosting works.
-- Session manager: stores conversation state, compact summaries, tool events, and decision trails.
+- Session manager: stores conversation state, compact summaries, lifecycle events, tool settlements, todos, task updates, plan exits, and decision trails.
 - Workspace adapter: resolves repo paths, reads files, searches content, and applies patches.
 - Tool registry: exposes typed tools with input schemas, permission levels, and audit behavior.
 - Permission policy: decides whether a tool call is allowed, denied, or requires user approval.
 - Shell runner: executes commands, captures stdout/stderr/exit code, and handles long-running processes.
 - Patch applier: applies controlled file edits and records changed paths.
 - Verification runner: runs configured lint/typecheck/test/build commands when available.
+- Subagent runner: launches foreground and background subagent tasks using the same agent loop while preventing nested task recursion.
 - Sandbox runner: runs risky verification in an isolated environment when available.
 - Model adapter layer: uses Vercel AI SDK for provider calls, streaming, structured outputs, and tool-capable model interactions.
 - MCP integration layer: uses the official MCP SDK to connect external tools and expose MAGI tools where useful.
@@ -37,6 +38,14 @@
 6. Feed failures back into the loop.
 7. Revise until the task is complete or blocked.
 8. Summarize changed files, verification results, and residual risks.
+
+## Agent And Tool Loop
+- Provider-native tool calls are preferred when the model supports them; JSON action fallback remains available for compatibility.
+- Unknown or malformed native tool calls become explicit `invalid_tool` observations so the model can recover without hiding provider mistakes.
+- Tool execution records pending, running, succeeded, failed, denied, and interrupted settlement states where applicable.
+- The `plan` agent is read-only by default but may write or edit only its exact plan file under `.magi/plans/` during plan-mode workflow.
+- The `task` tool supports foreground subagents for blocking research/work and background subagents for independent work that records `task_update` events.
+- Background tasks require a saved session, write events to the session where they started, and deny prompt-gated permissions rather than blocking on interactive approval.
 
 ## MAGI Gate Triggers
 - User explicitly asks for MAGI, consensus, deep review, or high-assurance validation.
@@ -57,8 +66,8 @@
 9. Continue, revise, reject, or ask the user depending on the decision.
 
 ## Tool System
-- Tools must declare `name`, `description`, `inputSchema`, `riskLevel`, `requiresApproval`, and `executor`.
-- Tool results must include status, output, error text, changed paths, and timing where applicable.
+- Tools must declare `name`, `description`, `inputSchema`, permission category, and execution behavior.
+- Tool results must include success/error status, output or error text, and settlement timing where applicable.
 - File writes and shell commands must be auditable.
 - Destructive git operations, broad deletes, secret access, network actions, and external deployments require explicit approval.
 - Read-only inspection should be low-friction, but still logged when it influences MAGI decisions.

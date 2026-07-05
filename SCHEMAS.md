@@ -10,6 +10,8 @@
 - `SessionEvent`
 - `ToolCall`
 - `ToolResult`
+- `ToolSettlement`
+- `TaskUpdate`
 - `PatchSet`
 - `VerificationRun`
 
@@ -43,39 +45,98 @@ type Task = {
 ```ts
 type SessionEvent = {
   id: string
-  taskId: string
-  type: "user" | "assistant" | "tool_call" | "tool_result" | "patch" | "verification" | "review" | "vote" | "decision"
-  timestamp: string
-  summary?: string
+  sessionId: string
+  sequence: number
+  type:
+    | "user_message"
+    | "assistant_message"
+    | "agent_step_started"
+    | "assistant_started"
+    | "agent_step_ended"
+    | "provider_error"
+    | "interruption"
+    | "tool_call"
+    | "tool_result"
+    | "tool_settlement"
+    | "permission_decision"
+    | "proposed_patch"
+    | "verification_result"
+    | "context_summary"
+    | "queued_user_input"
+    | "model_switch"
+    | "todo_update"
+    | "task_update"
+    | "plan_exit"
+    | "summary"
+    | "magi_decision_trail"
   payload: unknown
+  createdAt: string
 }
 ```
 
 ## Tool Call
 ```ts
-type ToolSource = "builtin" | "mcp" | "plugin"
+type ToolName =
+  | "read"
+  | "glob"
+  | "grep"
+  | "edit"
+  | "write"
+  | "apply_patch"
+  | "bash"
+  | "webfetch"
+  | "todowrite"
+  | "question"
+  | "skill"
+  | "task"
+  | "plan_exit"
 
 type ToolCall = {
   id: string
-  toolName: string
-  source: ToolSource
+  name: ToolName
   input: unknown
-  riskLevel: "low" | "medium" | "high"
-  approval: "not_required" | "requested" | "approved" | "denied"
 }
 ```
 
 ## Tool Result
 ```ts
 type ToolResult = {
-  callId: string
-  status: "success" | "error" | "cancelled"
-  stdout?: string
-  stderr?: string
+  id: string
+  name: ToolName
+  ok: boolean
+  output: string
   error?: string
-  changedPaths?: string[]
-  exitCode?: number
+}
+```
+
+## Tool Settlement
+```ts
+type ToolSettlement = {
+  toolCallId: string
+  name: ToolName
+  status: "pending" | "running" | "succeeded" | "failed" | "denied" | "interrupted"
+  input?: unknown
+  startedAt?: string
+  endedAt?: string
   durationMs?: number
+  outputPreview?: string
+  error?: string
+}
+```
+
+## Task Update
+```ts
+type TaskUpdate = {
+  taskId: string
+  status: "started" | "completed" | "failed"
+  description: string
+  subagentId: string
+  parentAgentId: string
+  providerId?: string
+  startedAt?: string
+  endedAt?: string
+  finalText?: string
+  error?: string
 }
 ```
 
