@@ -1,4 +1,5 @@
-import type { ToolCall } from "../tools.js";
+import type { ModelToolCall } from "../model.js";
+import type { ToolName } from "../tools.js";
 import type { ExecutableAgentAction } from "./actions.js";
 import type { AgentInfo } from "./registry.js";
 import {
@@ -31,10 +32,27 @@ export function getEditToolMode(_agent: AgentInfo, model?: string): "patch" | "e
     : "edit";
 }
 
-export function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction {
-  const input = readToolInput(toolCall.input);
+export function toolCallToAgentAction(toolCall: ModelToolCall): ExecutableAgentAction {
+  if (!isToolName(toolCall.name)) {
+    return invalidToolAction(toolCall, `Unsupported native tool name: ${toolCall.name}`);
+  }
 
-  switch (toolCall.name) {
+  let input: Record<string, unknown>;
+  try {
+    input = readToolInput(toolCall.input);
+  } catch (error) {
+    return invalidToolAction(toolCall, formatError(error));
+  }
+
+  try {
+    return readKnownToolCall(toolCall.name, input);
+  } catch (error) {
+    return invalidToolAction(toolCall, formatError(error));
+  }
+}
+
+function readKnownToolCall(name: ToolName, input: Record<string, unknown>): ExecutableAgentAction {
+  switch (name) {
     case "read":
       return { type: "read", path: readString(input, "path") };
     case "glob":
@@ -66,6 +84,37 @@ export function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction
     case "bash":
       return { type: "verify", command: readString(input, "command") };
   }
+}
+
+function invalidToolAction(toolCall: ModelToolCall, reason: string): ExecutableAgentAction {
+  return {
+    type: "invalid_tool",
+    toolName: toolCall.name,
+    reason,
+    input: toolCall.input,
+  };
+}
+
+function isToolName(value: string): value is ToolName {
+  return (
+    value === "read" ||
+    value === "glob" ||
+    value === "grep" ||
+    value === "edit" ||
+    value === "write" ||
+    value === "apply_patch" ||
+    value === "bash" ||
+    value === "webfetch" ||
+    value === "todowrite" ||
+    value === "question" ||
+    value === "skill" ||
+    value === "task" ||
+    value === "plan_exit"
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function readTaskAction(input: Record<string, unknown>): ExecutableAgentAction {

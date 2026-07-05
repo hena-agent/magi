@@ -4,7 +4,7 @@ import { OAUTH_DUMMY_KEY } from "./auth.js";
 import { listEffectiveModelProviders, type ModelProviderSettings } from "./model-catalog.js";
 import { formatToolCalls, formatToolDefinitions } from "./model-tools.js";
 import { createOpenAICodexOAuthFetch, isOpenAICodexOAuthModel } from "./openai-codex-oauth.js";
-import type { ToolCall, ToolName } from "./tools.js";
+import type { ToolName } from "./tools.js";
 
 type ModelAdapterConfig = {
   workspaceRoot?: string;
@@ -52,8 +52,14 @@ export type ModelToolDefinition = {
 
 export type ModelStepResponse = {
   text: string;
-  toolCalls: ToolCall[];
+  toolCalls: ModelToolCall[];
   finishReason?: string;
+};
+
+export type ModelToolCall = {
+  id: string;
+  name: string;
+  input: unknown;
 };
 
 const defaultSystemPrompt =

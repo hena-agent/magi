@@ -36,6 +36,8 @@ export function getActionKey(action: ExecutableAgentAction): string {
       return `task:${action.subagent_type}:${action.prompt}`;
     case "plan_exit":
       return "plan_exit";
+    case "invalid_tool":
+      return `invalid_tool:${action.toolName}:${action.reason}:${JSON.stringify(action.input)}`;
     case "verify":
       return `verify:${action.command ?? ""}`;
     case "propose_patch":

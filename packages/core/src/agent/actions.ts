@@ -21,6 +21,7 @@ export type AgentAction =
       command?: string;
     }
   | { type: "plan_exit" }
+  | { type: "invalid_tool"; toolName: string; reason: string; input?: unknown }
   | { type: "verify"; command?: string }
   | { type: "propose_patch"; patch: string; summary?: string }
   | { type: "finish"; summary: string };

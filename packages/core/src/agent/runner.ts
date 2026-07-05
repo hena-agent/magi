@@ -13,6 +13,7 @@ import {
   nativeToolSystemPrompt,
 } from "./runner-prompts.js";
 import type { AgentRunEvent, AgentRunResult, AgentRunStep } from "./runner-types.js";
+import { formatInvalidToolObservation } from "./runner-invalid-tool.js";
 import { formatObservation, getActionKey } from "./runner-utils.js";
 
 export { getAgentRunContinuation } from "./runner-continuation.js";
@@ -204,7 +205,11 @@ async function executeNonTerminalAction(
   action: ExecutableAgentAction,
 ): Promise<void> {
   const repeatedObservation = recordActionOccurrence(state.actionCounts, action);
-  const observation = repeatedObservation ?? (await input.executeAction(action));
+  const observation =
+    repeatedObservation ??
+    (action.type === "invalid_tool"
+      ? formatInvalidToolObservation(action)
+      : await input.executeAction(action));
   state.steps.push({ action, observation });
   state.observations.push(formatObservation(action, observation));
   input.onEvent?.({
