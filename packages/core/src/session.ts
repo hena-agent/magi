@@ -34,6 +34,7 @@ export type SessionEventType =
   | "queued_user_input"
   | "model_switch"
   | "todo_update"
+  | "task_update"
   | "plan_exit"
   | "summary";
 

@@ -19,6 +19,7 @@ export type AgentAction =
       subagent_type: string;
       task_id?: string;
       command?: string;
+      background?: boolean;
     }
   | { type: "plan_exit" }
   | { type: "invalid_tool"; toolName: string; reason: string; input?: unknown }
@@ -129,6 +130,7 @@ function readWebfetchAction(action: Record<string, unknown>): AgentAction {
 function readTaskAction(action: Record<string, unknown>): AgentAction {
   const taskId = readOptionalString(action, "task_id");
   const command = readOptionalString(action, "command");
+  const background = readOptionalBoolean(action, "background");
 
   return {
     type: "task",
@@ -137,6 +139,7 @@ function readTaskAction(action: Record<string, unknown>): AgentAction {
     subagent_type: readString(action, "subagent_type"),
     ...(taskId === undefined ? {} : { task_id: taskId }),
     ...(command === undefined ? {} : { command }),
+    ...(background === undefined ? {} : { background }),
   };
 }
 

@@ -143,6 +143,7 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
       description: "short task description",
       prompt: "Detailed instructions for the subagent",
       subagent_type: agent.id === "plan" ? "explore" : "general",
+      background: false,
     },
     ...(agent.id === "plan"
       ? [

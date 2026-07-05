@@ -41,12 +41,14 @@ describe("validateAgentAction", () => {
         description: "Explore docs",
         prompt: "Read docs",
         subagent_type: "explore",
+        background: true,
       }),
     ).toEqual({
       type: "task",
       description: "Explore docs",
       prompt: "Read docs",
       subagent_type: "explore",
+      background: true,
     });
   });
 

@@ -33,7 +33,7 @@ export function getActionKey(action: ExecutableAgentAction): string {
     case "skill":
       return `skill:${action.name}`;
     case "task":
-      return `task:${action.subagent_type}:${action.prompt}`;
+      return `task:${action.background === true ? "background" : "foreground"}:${action.subagent_type}:${action.prompt}`;
     case "plan_exit":
       return "plan_exit";
     case "invalid_tool":

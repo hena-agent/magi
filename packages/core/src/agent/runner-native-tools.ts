@@ -120,6 +120,7 @@ function formatError(error: unknown): string {
 function readTaskAction(input: Record<string, unknown>): ExecutableAgentAction {
   const taskId = readOptionalString(input, "task_id");
   const command = readOptionalString(input, "command");
+  const background = readOptionalBoolean(input, "background");
 
   return {
     type: "task",
@@ -128,6 +129,7 @@ function readTaskAction(input: Record<string, unknown>): ExecutableAgentAction {
     subagent_type: readString(input, "subagent_type"),
     ...(taskId === undefined ? {} : { task_id: taskId }),
     ...(command === undefined ? {} : { command }),
+    ...(background === undefined ? {} : { background }),
   };
 }
 

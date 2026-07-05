@@ -106,7 +106,7 @@ export const readNativeToolDefinitions = [
   {
     name: "task" as const,
     description:
-      "Launch a foreground subagent task. Use explore for codebase research and general for broader work.",
+      "Launch a subagent task. Use foreground by default; set background true only when the task can run independently while the parent continues.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,6 +115,7 @@ export const readNativeToolDefinitions = [
         subagent_type: { type: "string" },
         task_id: { type: "string" },
         command: { type: "string" },
+        background: { type: "boolean" },
       },
       required: ["description", "prompt", "subagent_type"],
       additionalProperties: false,
