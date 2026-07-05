@@ -71,6 +71,19 @@
 - [x] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
 - [x] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
 - [x] Add queued and steering input handling while an agent run is active.
+- [~] Add OpenCode-style tool parity in the real agent loop, not only as slash commands.
+  - [x] Add core/native/JSON/TUI loop support for `webfetch`, `todowrite`, and `question`.
+  - [x] Upgrade `question` from output-only prompts to interactive TUI question answering with tool-result continuation.
+  - [x] Upgrade `todowrite` from output-only updates to persisted session todo state and resume display.
+  - [~] Harden `webfetch` toward OpenCode behavior with better markdown conversion, media handling, response truncation metadata, and network permission UX.
+  - [x] Add `skill` tool with workspace and user skill discovery, loading, and permission checks.
+  - [x] Add foreground `task` tool for `general` and `explore` subagents using the existing agent runner.
+  - [ ] Add background `task` execution after foreground subagent behavior is stable.
+  - [x] Add `plan_exit` plus OpenCode `plan-mode.txt` workflow, plan file path management, and plan-file-only write exceptions.
+  - [ ] Add LSP tool support for document symbols, definitions, references, hover, and call hierarchy.
+  - [ ] Add `websearch` with explicit provider selection, API key handling, and network permission prompts.
+  - [ ] Add internal invalid-tool handling for malformed provider tool calls.
+  - [ ] Add plugin/custom tool registry only after sandbox and permission boundaries are designed.
 - [~] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
 
 ## Phase 4: Multi-Engine Support
