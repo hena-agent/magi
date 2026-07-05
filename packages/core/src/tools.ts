@@ -4,7 +4,10 @@ import { editTool } from "./tools/edit.js";
 import { globTool } from "./tools/glob.js";
 import { grepTool } from "./tools/grep.js";
 import { readTool } from "./tools/read.js";
+import { questionTool } from "./tools/question.js";
 import { createOkResult, truncateToolPreview } from "./tools/result.js";
+import { skillTool } from "./tools/skill.js";
+import { todowriteTool } from "./tools/todowrite.js";
 import type {
   ToolCall,
   ToolName,
@@ -14,6 +17,7 @@ import type {
   ToolSettlement,
   ToolSettlementStatus,
 } from "./tools/types.js";
+import { webfetchTool } from "./tools/webfetch.js";
 import { writeTool } from "./tools/write.js";
 
 export type {
@@ -29,6 +33,10 @@ export type {
 export function getToolPermission(toolName: ToolName): ToolPermission {
   if (toolName === "bash") {
     return "shell";
+  }
+
+  if (toolName === "webfetch") {
+    return "network";
   }
 
   if (toolName === "edit" || toolName === "write" || toolName === "apply_patch") {
@@ -84,6 +92,18 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
         return createOkResult(call, applyPatchTool(call.input, runtime));
       case "bash":
         return createOkResult(call, bashTool(call.input, runtime));
+      case "webfetch":
+        return createOkResult(call, await webfetchTool(call.input));
+      case "todowrite":
+        return createOkResult(call, todowriteTool(call.input));
+      case "question":
+        return createOkResult(call, questionTool(call.input));
+      case "skill":
+        return createOkResult(call, skillTool(call.input, runtime.workspaceRoot));
+      case "task":
+        throw new Error("task is executed by the agent runner, not the core tool runtime.");
+      case "plan_exit":
+        throw new Error("plan_exit is executed by the TUI controller, not the core tool runtime.");
     }
   } catch (error) {
     return {

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -122,6 +122,48 @@ it("maps permissions for tool names", () => {
   expect(getToolPermission("write")).toBe("write");
   expect(getToolPermission("apply_patch")).toBe("write");
   expect(getToolPermission("bash")).toBe("shell");
+  expect(getToolPermission("webfetch")).toBe("network");
+  expect(getToolPermission("todowrite")).toBe("read");
+  expect(getToolPermission("question")).toBe("read");
+});
+
+it("runs todowrite and question tools", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+
+  await expect(
+    runTool(
+      createToolCall("todowrite", {
+        todos: [{ content: "Inspect docs", status: "in_progress", priority: "high" }],
+      }),
+      { workspaceRoot },
+    ),
+  ).resolves.toMatchObject({ ok: true, output: expect.stringContaining("1 open") });
+
+  await expect(
+    runTool(
+      createToolCall("question", {
+        questions: [
+          {
+            question: "Which path?",
+            header: "Path",
+            options: [{ label: "A", description: "Use A" }],
+          },
+        ],
+      }),
+      { workspaceRoot },
+    ),
+  ).resolves.toMatchObject({ ok: true, output: expect.stringContaining("Which path?") });
+});
+
+it("loads workspace skills", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+  const skillDir = join(workspaceRoot, ".magi", "skills", "demo");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "# Demo\nUse this skill.");
+
+  await expect(
+    runTool(createToolCall("skill", { name: "demo" }), { workspaceRoot }),
+  ).resolves.toMatchObject({ ok: true, output: expect.stringContaining("Use this skill.") });
 });
 
 it("creates durable settlement records", () => {

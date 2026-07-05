@@ -15,7 +15,7 @@ export const agentTurnSystemPrompt = [
 
 export const nativeToolSystemPrompt = [
   "You are MAGI running one local coding-agent step.",
-  "Use tools only when needed to inspect or modify the repository.",
+  "Use tools only when needed for the current agent permissions.",
   "If no tool is needed, answer concisely with the available observations.",
 ].join("\n");
 
@@ -58,6 +58,7 @@ export function buildAgentSystemPrompt(
 ): string {
   return [
     agent.prompt,
+    agent.id === "plan" ? MAGI_PLAN_REMINDER : undefined,
     ...systemContext,
     protocolPrompt,
     isLastStep
@@ -122,6 +123,47 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
     { type: "read", path: "relative/path" },
     { type: "glob", pattern: "**/*.ts" },
     { type: "grep", pattern: "search regex", include: "optional glob" },
+    {
+      type: "todowrite",
+      todos: [{ content: "specific task", status: "in_progress", priority: "high" }],
+    },
+    {
+      type: "question",
+      questions: [
+        {
+          question: "Clarifying question for the user",
+          header: "Decision",
+          options: [{ label: "Option", description: "What this means" }],
+        },
+      ],
+    },
+    { type: "skill", name: "skill-name" },
+    {
+      type: "task",
+      description: "short task description",
+      prompt: "Detailed instructions for the subagent",
+      subagent_type: agent.id === "plan" ? "explore" : "general",
+    },
+    ...(agent.id === "plan"
+      ? [
+          {
+            type: "write",
+            filePath: ".magi/plans/<session-id>.md",
+            content: "final implementation plan",
+          },
+          {
+            type: "edit",
+            filePath: ".magi/plans/<session-id>.md",
+            oldString: "exact text to replace",
+            newString: "replacement text",
+            replaceAll: false,
+          },
+          { type: "plan_exit" },
+        ]
+      : []),
+    ...(agent.permission.network === "deny"
+      ? []
+      : [{ type: "webfetch", url: "https://example.com", format: "markdown" }]),
     ...(agent.permission.shell === "deny"
       ? []
       : [{ type: "verify", command: "optional focused command" }]),
@@ -159,7 +201,5 @@ function formatUserMessageWithReminders(agent: AgentInfo, userMessage: string): 
     return userMessage;
   }
 
-  return [userMessage, "", "<system-reminder>", MAGI_PLAN_REMINDER, "</system-reminder>"].join(
-    "\n",
-  );
+  return [userMessage, "", MAGI_PLAN_REMINDER].join("\n");
 }

@@ -32,6 +32,12 @@ function isToolName(value: string): value is ToolName {
     value === "edit" ||
     value === "write" ||
     value === "apply_patch" ||
-    value === "bash"
+    value === "bash" ||
+    value === "webfetch" ||
+    value === "todowrite" ||
+    value === "question" ||
+    value === "skill" ||
+    value === "task" ||
+    value === "plan_exit"
   );
 }

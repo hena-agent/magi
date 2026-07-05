@@ -31,6 +31,23 @@ describe("validateAgentAction", () => {
     expect(
       validateAgentAction({ type: "apply_patch", patchText: "*** Begin Patch\n*** End Patch" }),
     ).toEqual({ type: "apply_patch", patchText: "*** Begin Patch\n*** End Patch" });
+    expect(validateAgentAction({ type: "skill", name: "demo" })).toEqual({
+      type: "skill",
+      name: "demo",
+    });
+    expect(
+      validateAgentAction({
+        type: "task",
+        description: "Explore docs",
+        prompt: "Read docs",
+        subagent_type: "explore",
+      }),
+    ).toEqual({
+      type: "task",
+      description: "Explore docs",
+      prompt: "Read docs",
+      subagent_type: "explore",
+    });
   });
 
   it("rejects unsupported actions", () => {
@@ -46,6 +63,15 @@ describe("agentActionToToolName", () => {
     ).toBe("edit");
     expect(agentActionToToolName({ type: "write", filePath: "a", content: "" })).toBe("write");
     expect(agentActionToToolName({ type: "apply_patch", patchText: "patch" })).toBe("apply_patch");
+    expect(agentActionToToolName({ type: "skill", name: "demo" })).toBe("skill");
+    expect(
+      agentActionToToolName({
+        type: "task",
+        description: "Explore",
+        prompt: "Read",
+        subagent_type: "explore",
+      }),
+    ).toBe("task");
     expect(agentActionToToolName({ type: "verify" })).toBeUndefined();
   });
 });

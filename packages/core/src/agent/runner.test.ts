@@ -147,8 +147,45 @@ it("exposes edit and write for non-Codex models", async () => {
 
   expect(tools).toContain("edit");
   expect(tools).toContain("write");
+  expect(tools).toContain("webfetch");
+  expect(tools).toContain("todowrite");
+  expect(tools).toContain("question");
+  expect(tools).toContain("skill");
+  expect(tools).toContain("task");
   expect(tools).not.toContain("apply_patch");
   expect(result.status).toBe("completed");
+});
+
+it("filters network tools from the plan agent while keeping planning tools", async () => {
+  let tools: string[] = [];
+
+  await runEventDrivenAgent({
+    engine: {
+      async generateText() {
+        return { text: JSON.stringify({ type: "finish", summary: "planned" }) };
+      },
+      async generateStep(input) {
+        tools = input.tools.map((tool) => tool.name);
+
+        return { text: "planned", toolCalls: [] };
+      },
+    },
+    agent: getAgent("plan"),
+    userMessage: "Plan",
+    async executeAction() {
+      return "unused";
+    },
+  });
+
+  expect(tools).toContain("read");
+  expect(tools).toContain("todowrite");
+  expect(tools).toContain("question");
+  expect(tools).toContain("skill");
+  expect(tools).toContain("task");
+  expect(tools).not.toContain("webfetch");
+  expect(tools).toContain("edit");
+  expect(tools).toContain("write");
+  expect(tools).not.toContain("apply_patch");
 });
 
 it("stops at a safe point when interrupted", async () => {
@@ -171,7 +208,7 @@ it("stops at a safe point when interrupted", async () => {
   expect(result.finalText).toBe("Agent run interrupted.");
 });
 
-it("injects plan reminders into the user prompt and filters denied plan actions", async () => {
+it("injects plan reminders into the system and user prompt and filters denied plan actions", async () => {
   let capturedSystem = "";
   let capturedPrompt = "";
   const result = await runEventDrivenAgent({
@@ -191,11 +228,38 @@ it("injects plan reminders into the user prompt and filters denied plan actions"
   });
 
   expect(result.finalText).toBe("planned");
-  expect(capturedSystem).not.toContain("Plan mode ACTIVE");
+  expect(capturedSystem).toContain("Plan mode ACTIVE");
   expect(capturedPrompt).toContain("<system-reminder>");
   expect(capturedPrompt).toContain("Plan mode ACTIVE");
+  expect(capturedPrompt).not.toContain("<system-reminder>\n<system-reminder>");
   expect(capturedPrompt).not.toContain("propose_patch");
   expect(capturedPrompt).not.toContain("verify");
+});
+
+it("injects plan reminders into native tool-call system prompts", async () => {
+  let capturedSystem = "";
+
+  await runEventDrivenAgent({
+    engine: {
+      async generateText() {
+        return { text: JSON.stringify({ type: "finish", summary: "planned" }) };
+      },
+      async generateStep(input) {
+        capturedSystem = input.system ?? "";
+
+        return { text: "planned", toolCalls: [] };
+      },
+    },
+    agent: getAgent("plan"),
+    userMessage: "Plan this",
+    async executeAction() {
+      return "unused";
+    },
+  });
+
+  expect(capturedSystem).toContain("Plan mode ACTIVE");
+  expect(capturedSystem).toContain("Use tools only when needed for the current agent permissions.");
+  expect(capturedSystem).not.toContain("inspect or modify");
 });
 
 it("appends OpenCode-style system context to the system prompt", async () => {

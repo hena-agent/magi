@@ -10,8 +10,8 @@ export function readObject(
   const inputObject = input as Record<string, unknown>;
 
   for (const field of requiredFields) {
-    if (typeof inputObject[field] !== "string" || inputObject[field].length === 0) {
-      throw new Error(`Tool input requires string field: ${field}`);
+    if (inputObject[field] === undefined) {
+      throw new Error(`Tool input requires field: ${field}`);
     }
   }
 

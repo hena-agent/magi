@@ -1,86 +1,18 @@
 import type { ToolCall } from "../tools.js";
 import type { ExecutableAgentAction } from "./actions.js";
 import type { AgentInfo } from "./registry.js";
-
-const readNativeToolDefinitions = [
-  {
-    name: "read" as const,
-    description: "Read a UTF-8 text file inside the workspace.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "glob" as const,
-    description: "List workspace files matching a glob pattern.",
-    inputSchema: {
-      type: "object",
-      properties: { pattern: { type: "string" } },
-      required: ["pattern"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "grep" as const,
-    description: "Search workspace file contents using a regular expression.",
-    inputSchema: {
-      type: "object",
-      properties: { pattern: { type: "string" }, include: { type: "string" } },
-      required: ["pattern"],
-      additionalProperties: false,
-    },
-  },
-];
-
-const editNativeToolDefinitions = [
-  {
-    name: "edit" as const,
-    description:
-      "Perform an exact string replacement in a workspace file. Prefer after reading the file. Use replaceAll only when all occurrences should change.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        filePath: { type: "string" },
-        oldString: { type: "string" },
-        newString: { type: "string" },
-        replaceAll: { type: "boolean" },
-      },
-      required: ["filePath", "oldString", "newString"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "write" as const,
-    description: "Write full content to a workspace file. Prefer edit for existing files.",
-    inputSchema: {
-      type: "object",
-      properties: { filePath: { type: "string" }, content: { type: "string" } },
-      required: ["filePath", "content"],
-      additionalProperties: false,
-    },
-  },
-];
-
-const patchNativeToolDefinitions = [
-  {
-    name: "apply_patch" as const,
-    description:
-      "Apply an OpenCode-style patch envelope with *** Begin Patch / *** End Patch and Add/Delete/Update file sections.",
-    inputSchema: {
-      type: "object",
-      properties: { patchText: { type: "string" } },
-      required: ["patchText"],
-      additionalProperties: false,
-    },
-  },
-];
+import {
+  editNativeToolDefinitions,
+  networkNativeToolDefinitions,
+  patchNativeToolDefinitions,
+  readNativeToolDefinitions,
+} from "./runner-native-tool-definitions.js";
 
 export function getNativeToolDefinitions(agent: AgentInfo, model: string | undefined) {
   return [
     ...(agent.permission.read === "deny" ? [] : readNativeToolDefinitions),
+    ...(agent.permission.network === "deny" ? [] : networkNativeToolDefinitions),
+    ...(agent.id === "plan" ? editNativeToolDefinitions : []),
     ...(agent.permission.write === "deny"
       ? []
       : getEditToolMode(agent, model) === "patch"
@@ -111,6 +43,18 @@ export function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction
       return readGrepAction(input);
     case "apply_patch":
       return { type: "apply_patch", patchText: readString(input, "patchText") };
+    case "webfetch":
+      return readWebfetchAction(input);
+    case "todowrite":
+      return { type: "todowrite", todos: readArray(input, "todos") };
+    case "question":
+      return { type: "question", questions: readArray(input, "questions") };
+    case "skill":
+      return { type: "skill", name: readString(input, "name") };
+    case "task":
+      return readTaskAction(input);
+    case "plan_exit":
+      return { type: "plan_exit" };
     case "edit":
       return readEditAction(input);
     case "write":
@@ -122,6 +66,36 @@ export function toolCallToAgentAction(toolCall: ToolCall): ExecutableAgentAction
     case "bash":
       return { type: "verify", command: readString(input, "command") };
   }
+}
+
+function readTaskAction(input: Record<string, unknown>): ExecutableAgentAction {
+  const taskId = readOptionalString(input, "task_id");
+  const command = readOptionalString(input, "command");
+
+  return {
+    type: "task",
+    description: readString(input, "description"),
+    prompt: readString(input, "prompt"),
+    subagent_type: readString(input, "subagent_type"),
+    ...(taskId === undefined ? {} : { task_id: taskId }),
+    ...(command === undefined ? {} : { command }),
+  };
+}
+
+function readWebfetchAction(input: Record<string, unknown>): ExecutableAgentAction {
+  const format = readOptionalString(input, "format");
+  const timeout = readOptionalNumber(input, "timeout");
+
+  if (format !== undefined && format !== "text" && format !== "markdown" && format !== "html") {
+    throw new Error("Native tool input field format must be text, markdown, or html");
+  }
+
+  return {
+    type: "webfetch",
+    url: readString(input, "url"),
+    ...(format === undefined ? {} : { format }),
+    ...(timeout === undefined ? {} : { timeout }),
+  };
 }
 
 function readGrepAction(input: Record<string, unknown>): ExecutableAgentAction {
@@ -193,6 +167,28 @@ function readOptionalBoolean(input: Record<string, unknown>, field: string): boo
 
   if (typeof value !== "boolean") {
     throw new Error(`Native tool input field must be a boolean: ${field}`);
+  }
+
+  return value;
+}
+
+function readOptionalNumber(input: Record<string, unknown>, field: string): number | undefined {
+  const value = input[field];
+
+  if (value === undefined) return undefined;
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Native tool input field must be a number: ${field}`);
+  }
+
+  return value;
+}
+
+function readArray(input: Record<string, unknown>, field: string): unknown[] {
+  const value = input[field];
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Native tool input field must be an array: ${field}`);
   }
 
   return value;

@@ -1,6 +1,19 @@
-export type ToolName = "read" | "glob" | "grep" | "edit" | "write" | "apply_patch" | "bash";
+export type ToolName =
+  | "read"
+  | "glob"
+  | "grep"
+  | "edit"
+  | "write"
+  | "apply_patch"
+  | "bash"
+  | "webfetch"
+  | "todowrite"
+  | "question"
+  | "skill"
+  | "task"
+  | "plan_exit";
 
-export type ToolPermission = "read" | "write" | "shell";
+export type ToolPermission = "read" | "write" | "shell" | "network";
 
 export type ToolCall = {
   id: string;

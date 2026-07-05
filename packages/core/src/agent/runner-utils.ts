@@ -24,6 +24,18 @@ export function getActionKey(action: ExecutableAgentAction): string {
       return `write:${action.filePath}:${action.content}`;
     case "apply_patch":
       return `apply_patch:${action.patchText}`;
+    case "webfetch":
+      return `webfetch:${action.url}:${action.format ?? "markdown"}`;
+    case "todowrite":
+      return `todowrite:${JSON.stringify(action.todos)}`;
+    case "question":
+      return `question:${JSON.stringify(action.questions)}`;
+    case "skill":
+      return `skill:${action.name}`;
+    case "task":
+      return `task:${action.subagent_type}:${action.prompt}`;
+    case "plan_exit":
+      return "plan_exit";
     case "verify":
       return `verify:${action.command ?? ""}`;
     case "propose_patch":
