@@ -10,6 +10,7 @@ export function readAgentPrompt(name: string): string {
 
 export const MAGI_BUILD_PROMPT = readAgentPrompt("build");
 export const MAGI_PLAN_REMINDER = readAgentPrompt("plan");
+export const MAGI_PLAN_MODE_PROMPT = readAgentPrompt("plan-mode");
 export const MAGI_BUILD_SWITCH_REMINDER = readAgentPrompt("build-switch");
 export const MAGI_EXPLORE_PROMPT = readAgentPrompt("explore");
 export const MAGI_SUMMARY_PROMPT = readAgentPrompt("summary");

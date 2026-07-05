@@ -33,6 +33,8 @@ export type SessionEventType =
   | "context_summary"
   | "queued_user_input"
   | "model_switch"
+  | "todo_update"
+  | "plan_exit"
   | "summary";
 
 export type SessionEvent = {
