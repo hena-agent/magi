@@ -30,6 +30,8 @@ type AppViewProps = {
   promptCursor: number;
   queuedPromptCount: number;
   questionAnswer: string;
+  questionOptionIndex: number;
+  questionSelectedOptionIndexes: Set<number>;
   riskLevel: string;
   selectedMessageId: string | undefined;
   sessionId: string | undefined;
@@ -55,6 +57,8 @@ export function AppView(props: AppViewProps) {
         pendingQuestion={props.pendingQuestion}
         pendingSelector={props.pendingSelector}
         questionAnswer={props.questionAnswer}
+        questionOptionIndex={props.questionOptionIndex}
+        questionSelectedOptionIndexes={props.questionSelectedOptionIndexes}
       />
       <CommandSuggestions
         commands={props.slashCommandSuggestions}

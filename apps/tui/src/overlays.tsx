@@ -6,6 +6,8 @@ export function OverlayArea(props: {
   pendingQuestion: PendingQuestion | undefined;
   pendingSelector: PendingSelector | undefined;
   questionAnswer: string;
+  questionOptionIndex: number;
+  questionSelectedOptionIndexes: Set<number>;
 }) {
   if (props.pendingSelector) {
     return <SelectorOverlay selector={props.pendingSelector} />;
@@ -13,7 +15,12 @@ export function OverlayArea(props: {
 
   if (props.pendingQuestion) {
     return (
-      <QuestionOverlay pendingQuestion={props.pendingQuestion} answer={props.questionAnswer} />
+      <QuestionOverlay
+        pendingQuestion={props.pendingQuestion}
+        answer={props.questionAnswer}
+        optionIndex={props.questionOptionIndex}
+        selectedOptionIndexes={props.questionSelectedOptionIndexes}
+      />
     );
   }
 
@@ -60,7 +67,12 @@ function PermissionOverlay(props: { pendingPermission: PendingPermission }) {
   );
 }
 
-function QuestionOverlay(props: { pendingQuestion: PendingQuestion; answer: string }) {
+function QuestionOverlay(props: {
+  pendingQuestion: PendingQuestion;
+  answer: string;
+  optionIndex: number;
+  selectedOptionIndexes: Set<number>;
+}) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
       <Text color="yellow" bold>
@@ -71,9 +83,14 @@ function QuestionOverlay(props: { pendingQuestion: PendingQuestion; answer: stri
           <Text color="cyan">{`${questionIndex + 1}. ${question.header}`}</Text>
           <Text>{question.question}</Text>
           {question.options.map((option, optionIndex) => (
-            <Text key={`${option.label}:${option.description}`} dimColor>
-              {`${optionIndex + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`}
-            </Text>
+            <QuestionOptionLine
+              key={`${option.label}:${option.description}`}
+              active={questionIndex === 0 && optionIndex === props.optionIndex}
+              checked={questionIndex === 0 && props.selectedOptionIndexes.has(optionIndex)}
+              description={option.description}
+              index={optionIndex}
+              label={option.label}
+            />
           ))}
           {question.multiple ? (
             <Text dimColor>Multiple answers allowed. Separate answers with commas.</Text>
@@ -81,8 +98,26 @@ function QuestionOverlay(props: { pendingQuestion: PendingQuestion; answer: stri
         </Box>
       ))}
       <Text>{`answer> ${props.answer}`}</Text>
-      <Text dimColor>[enter] submit [esc] cancel</Text>
+      <Text dimColor>↑/↓ select space mark enter submit esc cancel</Text>
     </Box>
+  );
+}
+
+function QuestionOptionLine(props: {
+  active: boolean;
+  checked: boolean;
+  description: string;
+  index: number;
+  label: string;
+}) {
+  return (
+    <Text
+      dimColor={!props.active && !props.checked}
+      color={props.active ? "black" : props.checked ? "cyan" : undefined}
+      backgroundColor={props.active ? "cyan" : undefined}
+    >
+      {`${props.active ? "›" : " "} ${props.checked ? "[x]" : "[ ]"} ${props.index + 1}. ${props.label}${props.description ? ` - ${props.description}` : ""}`}
+    </Text>
   );
 }
 

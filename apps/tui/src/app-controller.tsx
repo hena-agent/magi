@@ -436,6 +436,10 @@ export function AppController() {
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
   const [pendingSelector, setPendingSelector] = useState<PendingSelector>();
   const [questionAnswer, setQuestionAnswer] = useState("");
+  const [questionOptionIndex, setQuestionOptionIndex] = useState(0);
+  const [questionSelectedOptionIndexes, setQuestionSelectedOptionIndexes] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [todos, setTodos] = useState<TodoItem[]>(() =>
     getLatestTodos(initialSession.session ? store.listEvents(initialSession.session.id) : []),
   );
@@ -546,13 +550,44 @@ export function AppController() {
       }
 
       if (pendingQuestion) {
+        const activeQuestion = pendingQuestion.questions[0];
+        const optionCount = activeQuestion?.options.length ?? 0;
+
         if (key.escape) {
           resolveQuestion(undefined);
           return;
         }
 
+        if (optionCount > 0 && key.upArrow) {
+          setQuestionOptionIndex((index) => (index <= 0 ? optionCount - 1 : index - 1));
+          return;
+        }
+
+        if (optionCount > 0 && key.downArrow) {
+          setQuestionOptionIndex((index) => (index + 1) % optionCount);
+          return;
+        }
+
+        if (optionCount > 0 && input === " ") {
+          if (activeQuestion?.multiple) {
+            setQuestionSelectedOptionIndexes((indexes) => {
+              const next = new Set(indexes);
+              if (next.has(questionOptionIndex)) {
+                next.delete(questionOptionIndex);
+              } else {
+                next.add(questionOptionIndex);
+              }
+              return next;
+            });
+          } else {
+            setQuestionSelectedOptionIndexes(new Set([questionOptionIndex]));
+          }
+          setQuestionAnswer("");
+          return;
+        }
+
         if (key.return) {
-          resolveQuestion(questionAnswer.trim().length === 0 ? undefined : questionAnswer.trim());
+          resolveQuestion(readPendingQuestionAnswer());
           return;
         }
 
@@ -563,6 +598,7 @@ export function AppController() {
 
         if (input.length > 0 && !key.ctrl && !key.meta) {
           setQuestionAnswer((currentAnswer) => currentAnswer + input);
+          setQuestionSelectedOptionIndexes(new Set());
         }
 
         return;
@@ -1752,6 +1788,27 @@ export function AppController() {
     pendingQuestion.resolve(answer);
   }
 
+  function readPendingQuestionAnswer(): string | undefined {
+    const customAnswer = questionAnswer.trim();
+    if (customAnswer.length > 0) {
+      return customAnswer;
+    }
+
+    if (questionSelectedOptionIndexes.size > 0) {
+      return [...questionSelectedOptionIndexes]
+        .sort((left, right) => left - right)
+        .map((index) => String(index + 1))
+        .join(", ");
+    }
+
+    const activeQuestion = pendingQuestion?.questions[0];
+    if (activeQuestion && activeQuestion.options.length > 0) {
+      return String(questionOptionIndex + 1);
+    }
+
+    return undefined;
+  }
+
   async function executeToolCall(
     call: ToolCall,
     agent: AgentInfo = activeAgent,
@@ -1808,6 +1865,8 @@ export function AppController() {
       const questions = readQuestionPrompts(call.input);
       const answer = await new Promise<string | undefined>((resolve) => {
         setQuestionAnswer("");
+        setQuestionOptionIndex(0);
+        setQuestionSelectedOptionIndexes(new Set());
         setPendingQuestion({ call, questions, resolve });
         addMessage("question: waiting for user answer");
       });
@@ -1829,6 +1888,8 @@ export function AppController() {
     } finally {
       setPendingQuestion(undefined);
       setQuestionAnswer("");
+      setQuestionOptionIndex(0);
+      setQuestionSelectedOptionIndexes(new Set());
     }
   }
 
@@ -2808,6 +2869,8 @@ export function AppController() {
       prompt={prompt}
       promptCursor={promptCursor}
       questionAnswer={questionAnswer}
+      questionOptionIndex={questionOptionIndex}
+      questionSelectedOptionIndexes={questionSelectedOptionIndexes}
       queuedPromptCount={queuedPromptsRef.current.length}
       riskLevel={task.riskLevel}
       selectedMessageId={selectedMessageId}
