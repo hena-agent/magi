@@ -138,6 +138,10 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
       ],
     },
     { type: "skill", name: "skill-name" },
+    { type: "lsp_symbols", filePath: "src/file.ts" },
+    { type: "lsp_definition", filePath: "src/file.ts", line: 1, character: 1 },
+    { type: "lsp_references", filePath: "src/file.ts", line: 1, character: 1 },
+    { type: "lsp_hover", filePath: "src/file.ts", line: 1, character: 1 },
     {
       type: "task",
       description: "short task description",

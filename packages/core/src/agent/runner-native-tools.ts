@@ -69,6 +69,12 @@ function readKnownToolCall(name: ToolName, input: Record<string, unknown>): Exec
       return { type: "question", questions: readArray(input, "questions") };
     case "skill":
       return { type: "skill", name: readString(input, "name") };
+    case "lsp_symbols":
+      return { type: "lsp_symbols", filePath: readString(input, "filePath") };
+    case "lsp_definition":
+    case "lsp_references":
+    case "lsp_hover":
+      return readLspPositionAction(name, input);
     case "task":
       return readTaskAction(input);
     case "plan_exit":
@@ -108,9 +114,25 @@ function isToolName(value: string): value is ToolName {
     value === "todowrite" ||
     value === "question" ||
     value === "skill" ||
+    value === "lsp_symbols" ||
+    value === "lsp_definition" ||
+    value === "lsp_references" ||
+    value === "lsp_hover" ||
     value === "task" ||
     value === "plan_exit"
   );
+}
+
+function readLspPositionAction(
+  type: "lsp_definition" | "lsp_references" | "lsp_hover",
+  input: Record<string, unknown>,
+): ExecutableAgentAction {
+  return {
+    type,
+    filePath: readString(input, "filePath"),
+    line: readPositiveInteger(input, "line"),
+    character: readPositiveInteger(input, "character"),
+  };
 }
 
 function formatError(error: unknown): string {
@@ -230,6 +252,16 @@ function readOptionalNumber(input: Record<string, unknown>, field: string): numb
 
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`Native tool input field must be a number: ${field}`);
+  }
+
+  return value;
+}
+
+function readPositiveInteger(input: Record<string, unknown>, field: string): number {
+  const value = input[field];
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error(`Native tool input field must be a positive integer: ${field}`);
   }
 
   return value;

@@ -32,6 +32,12 @@ export function getActionKey(action: ExecutableAgentAction): string {
       return `question:${JSON.stringify(action.questions)}`;
     case "skill":
       return `skill:${action.name}`;
+    case "lsp_symbols":
+      return `lsp_symbols:${action.filePath}`;
+    case "lsp_definition":
+    case "lsp_references":
+    case "lsp_hover":
+      return `${action.type}:${action.filePath}:${action.line}:${action.character}`;
     case "task":
       return `task:${action.background === true ? "background" : "foreground"}:${action.subagent_type}:${action.prompt}`;
     case "plan_exit":

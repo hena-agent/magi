@@ -104,6 +104,61 @@ export const readNativeToolDefinitions = [
     },
   },
   {
+    name: "lsp_symbols" as const,
+    description: "List document symbols for a TypeScript or JavaScript file.",
+    inputSchema: {
+      type: "object",
+      properties: { filePath: { type: "string" } },
+      required: ["filePath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "lsp_definition" as const,
+    description:
+      "Find definitions for a symbol in a TypeScript or JavaScript file. line and character are 1-based.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        line: { type: "number" },
+        character: { type: "number" },
+      },
+      required: ["filePath", "line", "character"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "lsp_references" as const,
+    description:
+      "Find references for a symbol in a TypeScript or JavaScript file. line and character are 1-based.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        line: { type: "number" },
+        character: { type: "number" },
+      },
+      required: ["filePath", "line", "character"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "lsp_hover" as const,
+    description:
+      "Show hover/type information for a symbol in a TypeScript or JavaScript file. line and character are 1-based.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        line: { type: "number" },
+        character: { type: "number" },
+      },
+      required: ["filePath", "line", "character"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "task" as const,
     description:
       "Launch a subagent task. Use foreground by default; set background true only when the task can run independently while the parent continues.",

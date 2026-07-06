@@ -1,4 +1,5 @@
 import type { ToolName } from "../tools.js";
+import { readPositiveInteger } from "./actions-input.js";
 
 export type AgentAction =
   | { type: "answer"; content: string }
@@ -12,6 +13,10 @@ export type AgentAction =
   | { type: "todowrite"; todos: unknown[] }
   | { type: "question"; questions: unknown[] }
   | { type: "skill"; name: string }
+  | { type: "lsp_symbols"; filePath: string }
+  | { type: "lsp_definition"; filePath: string; line: number; character: number }
+  | { type: "lsp_references"; filePath: string; line: number; character: number }
+  | { type: "lsp_hover"; filePath: string; line: number; character: number }
   | {
       type: "task";
       description: string;
@@ -40,6 +45,10 @@ export function validateAgentAction(value: unknown): AgentAction {
 }
 
 function readActionByType(action: Record<string, unknown>, type: string): AgentAction {
+  if (isLspPositionActionType(type)) {
+    return readLspPositionAction(action, type);
+  }
+
   switch (type) {
     case "answer":
       return { type, content: readString(action, "content") };
@@ -49,17 +58,8 @@ function readActionByType(action: Record<string, unknown>, type: string): AgentA
       return { type, pattern: readString(action, "pattern") };
     case "grep":
       return readGrepAction(action);
-    case "edit": {
-      const replaceAll = readOptionalBoolean(action, "replaceAll");
-
-      return {
-        type,
-        filePath: readString(action, "filePath"),
-        oldString: readStringAllowEmpty(action, "oldString"),
-        newString: readStringAllowEmpty(action, "newString"),
-        ...(replaceAll === undefined ? {} : { replaceAll }),
-      };
-    }
+    case "edit":
+      return readEditAction(action);
     case "write":
       return readWriteAction(action);
     case "apply_patch":
@@ -72,6 +72,8 @@ function readActionByType(action: Record<string, unknown>, type: string): AgentA
       return { type, questions: readArray(action, "questions") };
     case "skill":
       return { type, name: readString(action, "name") };
+    case "lsp_symbols":
+      return { type, filePath: readString(action, "filePath") };
     case "task":
       return readTaskAction(action);
     case "plan_exit":
@@ -81,20 +83,53 @@ function readActionByType(action: Record<string, unknown>, type: string): AgentA
 
       return { type, ...(command === undefined ? {} : { command }) };
     }
-    case "propose_patch": {
-      const summary = readOptionalString(action, "summary");
-
-      return {
-        type,
-        patch: readString(action, "patch"),
-        ...(summary === undefined ? {} : { summary }),
-      };
-    }
+    case "propose_patch":
+      return readProposePatchAction(action);
     case "finish":
       return { type, summary: readString(action, "summary") };
     default:
       throw new Error(`Unsupported agent action type: ${type}`);
   }
+}
+
+function readEditAction(action: Record<string, unknown>): AgentAction {
+  const replaceAll = readOptionalBoolean(action, "replaceAll");
+
+  return {
+    type: "edit",
+    filePath: readString(action, "filePath"),
+    oldString: readStringAllowEmpty(action, "oldString"),
+    newString: readStringAllowEmpty(action, "newString"),
+    ...(replaceAll === undefined ? {} : { replaceAll }),
+  };
+}
+
+function readProposePatchAction(action: Record<string, unknown>): AgentAction {
+  const summary = readOptionalString(action, "summary");
+
+  return {
+    type: "propose_patch",
+    patch: readString(action, "patch"),
+    ...(summary === undefined ? {} : { summary }),
+  };
+}
+
+function isLspPositionActionType(
+  type: string,
+): type is "lsp_definition" | "lsp_references" | "lsp_hover" {
+  return type === "lsp_definition" || type === "lsp_references" || type === "lsp_hover";
+}
+
+function readLspPositionAction(
+  action: Record<string, unknown>,
+  type: "lsp_definition" | "lsp_references" | "lsp_hover",
+): AgentAction {
+  return {
+    type,
+    filePath: readString(action, "filePath"),
+    line: readPositiveInteger(action, "line"),
+    character: readPositiveInteger(action, "character"),
+  };
 }
 
 function readGrepAction(action: Record<string, unknown>): AgentAction {
@@ -155,6 +190,10 @@ export function agentActionToToolName(action: ExecutableAgentAction): ToolName |
     action.type === "todowrite" ||
     action.type === "question" ||
     action.type === "skill" ||
+    action.type === "lsp_symbols" ||
+    action.type === "lsp_definition" ||
+    action.type === "lsp_references" ||
+    action.type === "lsp_hover" ||
     action.type === "task" ||
     action.type === "plan_exit"
   ) {
