@@ -186,24 +186,15 @@ Inside the TUI:
 /auth login openai
 /model
 /model status
+/agent
 /plan
 /build
-/read ROADMAP.md
-/glob **/*.ts
-/grep Phase ROADMAP.md
-/webfetch https://example.com markdown
-/websearch exa current TypeScript LSP best practices
-/websearch parallel current AI coding agent research
-/websearch brave latest Node.js release
-/skill frontend-design
-/lsp_symbols packages/core/src/tools.ts
-/lsp_definition packages/core/src/tools.ts 78 23
-/lsp_references packages/core/src/tools.ts 78 23
-/lsp_hover packages/core/src/tools.ts 78 23
-/lsp_call_hierarchy packages/core/src/tools.ts 78 23 both
-/bash pnpm test
-/apply_patch path/to/change.patch
+/queue
+/clear_queue
+/steer Use focused tests first
+/interrupt
 /verify
+/revise
 /summary
 /sessions
 /sessions all
@@ -219,16 +210,14 @@ Notes:
 - `/mode` shows the current MAGI mode, active agent, selected model provider, and session.
 - `/auth` manages OpenAI OAuth credentials for built-in Codex-style OpenAI model providers.
 - `/model` lists, switches, resets, and reports effective model providers from config plus built-ins.
+- `/agent` lists and switches built-in agents.
 - `/plan` switches to the read-only planning agent. The plan agent can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
 - `/build` switches back to the default build agent.
-- `/read`, `/glob`, `/grep`, `/todowrite`, `/question`, and `/skill` are read/planning tools.
-- `/lsp_symbols`, `/lsp_definition`, `/lsp_references`, `/lsp_hover`, and `/lsp_call_hierarchy` are TypeScript/JavaScript LSP read tools. Position inputs are 1-based `line` and `character` values.
-- `/webfetch` is a network tool. It returns response metadata, markdown/text/html content, JSON pretty-printing, unsupported media notices, and truncation metadata.
-- `/websearch` is a network tool backed by Exa, Parallel, and Brave. It uses `MAGI_WEBSEARCH_PROVIDER`, `EXA_API_KEY`, `PARALLEL_API_KEY`, and `BRAVE_SEARCH_API_KEY` when present. If no provider is specified, MAGI tries Exa, then Parallel, then Brave.
-- `/bash` is a shell tool and follows the configured shell permission policy.
-- `/apply_patch` applies a `git apply` compatible patch file and follows the configured write permission policy.
+- `/queue`, `/clear_queue`, `/steer`, and `/interrupt` control active or queued agent runs.
 - `/verify` runs configured verification commands.
+- `/revise` asks the active agent to revise from recent verification failures.
 - `/summary` reports changed files, verification results, and residual risk.
+- File reads, search, LSP, web fetch/search, shell, and patch application are agent tools rather than user-facing slash commands; ask the agent in plain language to use them.
 - The agent loop supports provider-native tool calls and JSON fallback actions. Malformed native tool calls are converted into `invalid_tool` observations rather than being silently ignored.
 - The `task` tool can launch foreground `general` and `explore` subagents. It can also launch background tasks with `background: true`; background tasks write `task_update` events and deny prompt-gated permissions instead of blocking on user input.
 - MAGI starts in a draft session by default and saves it only after the first successful normal prompt.

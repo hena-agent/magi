@@ -46,7 +46,6 @@ import {
   type SessionEventType,
   type SessionStore,
   type ToolCall,
-  type ToolName,
   type ToolResult,
 } from "@magi/core";
 import { useApp, useInput } from "ink";
@@ -104,6 +103,7 @@ export type SlashCommandInfo = {
   usage: string;
   description: string;
   aliases?: string[];
+  hidden?: boolean;
 };
 
 const slashCommands: SlashCommandInfo[] = [
@@ -149,59 +149,113 @@ const slashCommands: SlashCommandInfo[] = [
   { name: "new", usage: "/new", description: "Start a new draft session" },
   { name: "rename", usage: "/rename <title>", description: "Rename the current session" },
   { name: "history", usage: "/history [limit]", description: "Show session event history" },
-  { name: "read", usage: "/read <path>", description: "Read a workspace file" },
-  { name: "glob", usage: "/glob <pattern>", description: "List files matching a glob" },
-  { name: "grep", usage: "/grep <pattern> [include]", description: "Search workspace files" },
-  { name: "webfetch", usage: "/webfetch <url> [format]", description: "Fetch web content" },
+  { name: "read", usage: "/read <path>", description: "Read a workspace file", hidden: true },
+  {
+    name: "glob",
+    usage: "/glob <pattern>",
+    description: "List files matching a glob",
+    hidden: true,
+  },
+  {
+    name: "grep",
+    usage: "/grep <pattern> [include]",
+    description: "Search workspace files",
+    hidden: true,
+  },
+  {
+    name: "webfetch",
+    usage: "/webfetch <url> [format]",
+    description: "Fetch web content",
+    hidden: true,
+  },
   {
     name: "websearch",
     usage: "/websearch [provider] <query>",
     description: "Search the web with Exa, Parallel, or Brave",
+    hidden: true,
   },
-  { name: "todowrite", usage: "/todowrite <json>", description: "Update session todo list" },
-  { name: "question", usage: "/question <json>", description: "Ask structured questions" },
-  { name: "skill", usage: "/skill <name>", description: "Load a named skill" },
-  { name: "lsp_symbols", usage: "/lsp_symbols <file>", description: "List document symbols" },
+  {
+    name: "todowrite",
+    usage: "/todowrite <json>",
+    description: "Update session todo list",
+    hidden: true,
+  },
+  {
+    name: "question",
+    usage: "/question <json>",
+    description: "Ask structured questions",
+    hidden: true,
+  },
+  { name: "skill", usage: "/skill <name>", description: "Load a named skill", hidden: true },
+  {
+    name: "lsp_symbols",
+    usage: "/lsp_symbols <file>",
+    description: "List document symbols",
+    hidden: true,
+  },
   {
     name: "lsp_definition",
     usage: "/lsp_definition <file> <line> <character>",
     description: "Find symbol definitions",
+    hidden: true,
   },
   {
     name: "lsp_references",
     usage: "/lsp_references <file> <line> <character>",
     description: "Find symbol references",
+    hidden: true,
   },
   {
     name: "lsp_hover",
     usage: "/lsp_hover <file> <line> <character>",
     description: "Show hover/type info",
+    hidden: true,
   },
   {
     name: "lsp_call_hierarchy",
     usage: "/lsp_call_hierarchy <file> <line> <character> [incoming|outgoing|both]",
     description: "Show symbol call hierarchy",
+    hidden: true,
   },
-  { name: "bash", usage: "/bash <command>", description: "Run a shell command with permission" },
-  { name: "apply_patch", usage: "/apply_patch <patch-file>", description: "Apply a patch file" },
+  {
+    name: "bash",
+    usage: "/bash <command>",
+    description: "Run a shell command with permission",
+    hidden: true,
+  },
+  {
+    name: "apply_patch",
+    usage: "/apply_patch <patch-file>",
+    description: "Apply a patch file",
+    hidden: true,
+  },
   {
     name: "apply_last_patch",
     usage: "/apply_last_patch",
     description: "Apply latest proposed patch",
+    hidden: true,
   },
-  { name: "magi_preview", usage: "/magi_preview", description: "Preview MAGI consensus context" },
+  {
+    name: "magi_preview",
+    usage: "/magi_preview",
+    description: "Preview MAGI consensus context",
+    hidden: true,
+  },
   {
     name: "maintain_sessions",
     usage: "/maintain_sessions",
     description: "Generate missing titles/summaries",
+    hidden: true,
   },
   {
     name: "session_cleanup_candidates",
     usage: "/session_cleanup_candidates",
     description: "Show sessions that look safe to clean up",
+    hidden: true,
   },
   { name: "help", usage: "/help", description: "Show command list" },
 ];
+const visibleSlashCommands = slashCommands.filter((command) => command.hidden !== true);
 
 function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
   if (!input.startsWith("/")) {
@@ -210,10 +264,10 @@ function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
 
   const rawQuery = input.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   if (rawQuery.length === 0) {
-    return slashCommands.slice(0, 8);
+    return visibleSlashCommands.slice(0, 8);
   }
 
-  return slashCommands
+  return visibleSlashCommands
     .filter((command) => {
       const names = [command.name, ...(command.aliases ?? [])];
       return names.some((name) => name.toLowerCase().startsWith(rawQuery));
@@ -411,7 +465,7 @@ export function AppController() {
 
     if (command === "help") {
       addMessage(
-        `Commands:\n${slashCommands.map((slashCommand) => `${slashCommand.usage} - ${slashCommand.description}`).join("\n")}`,
+        `Commands:\n${visibleSlashCommands.map((slashCommand) => `${slashCommand.usage} - ${slashCommand.description}`).join("\n")}`,
       );
       return;
     }
@@ -574,22 +628,7 @@ export function AppController() {
       return;
     }
 
-    const call = parseToolCommand(command, args.join(" "));
-
-    if (!call) {
-      addMessage(`Unknown command: /${command}. Type /help for available commands.`);
-      return;
-    }
-
-    if (
-      !requirePersistedSession(
-        `Run a normal prompt first, or /resume an existing session, before running /${command}.`,
-      )
-    ) {
-      return;
-    }
-
-    await runToolWithPermission(call);
+    addMessage(`Unknown command: /${command}. Type /help for available commands.`);
   }
 
   async function submitAgentPrompt(
@@ -2212,104 +2251,6 @@ export function AppController() {
   );
 }
 
-function parseToolCommand(command: string, rawArgs: string): ToolCall | undefined {
-  if (!isToolName(command)) {
-    return undefined;
-  }
-
-  switch (command) {
-    case "read":
-      return createToolCall(command, { path: rawArgs.trim() });
-    case "glob":
-      return createToolCall(command, { pattern: rawArgs.trim() });
-    case "grep": {
-      const [pattern = "", include] = rawArgs.split(" ");
-
-      return createToolCall(command, {
-        pattern,
-        ...(include === undefined ? {} : { include }),
-      });
-    }
-    case "bash":
-      return createToolCall(command, { command: rawArgs });
-    case "edit": {
-      const firstSpaceIndex = rawArgs.search(/\s/);
-      const filePath =
-        firstSpaceIndex === -1 ? rawArgs.trim() : rawArgs.slice(0, firstSpaceIndex).trim();
-      const args = firstSpaceIndex === -1 ? "" : rawArgs.slice(firstSpaceIndex).trimStart();
-      const separatorIndex = args.indexOf("=>");
-
-      if (separatorIndex === -1) {
-        return createToolCall(command, { filePath, oldString: args, newString: "" });
-      }
-
-      return createToolCall(command, {
-        filePath,
-        oldString: args.slice(0, separatorIndex).trim(),
-        newString: args.slice(separatorIndex + "=>".length).trim(),
-      });
-    }
-    case "write": {
-      const firstSpaceIndex = rawArgs.search(/\s/);
-
-      if (firstSpaceIndex === -1) {
-        return createToolCall(command, { filePath: rawArgs.trim(), content: "" });
-      }
-
-      return createToolCall(command, {
-        filePath: rawArgs.slice(0, firstSpaceIndex).trim(),
-        content: rawArgs.slice(firstSpaceIndex).trimStart(),
-      });
-    }
-    case "apply_patch":
-      return createToolCall(command, { patchFile: rawArgs.trim() });
-    case "webfetch": {
-      const [url = "", format] = rawArgs.split(" ");
-
-      return createToolCall(command, {
-        url,
-        ...(format === undefined ? {} : { format }),
-      });
-    }
-    case "websearch": {
-      const trimmed = rawArgs.trim();
-      const [first = "", ...rest] = trimmed.split(/\s+/);
-      const providerId = isWebsearchProvider(first) ? first : undefined;
-      const query = providerId ? rest.join(" ") : trimmed;
-
-      return createToolCall(command, {
-        query,
-        ...(providerId === undefined ? {} : { providerId }),
-      });
-    }
-    case "todowrite":
-      return createToolCall(command, { todos: JSON.parse(rawArgs) as unknown });
-    case "question":
-      return createToolCall(command, { questions: JSON.parse(rawArgs) as unknown });
-    case "skill":
-      return createToolCall(command, { name: rawArgs.trim() });
-    case "lsp_symbols":
-      return createToolCall(command, { filePath: rawArgs.trim() });
-    case "lsp_definition":
-    case "lsp_references":
-    case "lsp_hover":
-    case "lsp_call_hierarchy": {
-      const [filePath = "", line = "", character = "", direction] = rawArgs.split(/\s+/);
-
-      return createToolCall(command, {
-        filePath,
-        line: Number(line),
-        character: Number(character),
-        ...(command === "lsp_call_hierarchy" && direction !== undefined ? { direction } : {}),
-      });
-    }
-    case "task":
-      return undefined;
-    case "plan_exit":
-      return undefined;
-  }
-}
-
 function createInitialSession(
   store: SessionStore,
   config: ReturnType<typeof loadConfig>,
@@ -2557,32 +2498,6 @@ function formatEventPayload(event: SessionEvent): string {
     case "magi_decision_trail":
       return "MAGI decision trail";
   }
-}
-
-function isToolName(value: string): value is ToolName {
-  return (
-    value === "read" ||
-    value === "glob" ||
-    value === "grep" ||
-    value === "edit" ||
-    value === "write" ||
-    value === "bash" ||
-    value === "apply_patch" ||
-    value === "webfetch" ||
-    value === "websearch" ||
-    value === "todowrite" ||
-    value === "question" ||
-    value === "skill" ||
-    value === "lsp_symbols" ||
-    value === "lsp_definition" ||
-    value === "lsp_references" ||
-    value === "lsp_hover" ||
-    value === "lsp_call_hierarchy"
-  );
-}
-
-function isWebsearchProvider(value: string): value is "exa" | "parallel" | "brave" {
-  return value === "exa" || value === "parallel" || value === "brave";
 }
 
 function truncate(value: string): string {
