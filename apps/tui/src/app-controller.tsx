@@ -23,6 +23,7 @@ import {
   getLatestProposedPatch,
   getLatestModelSelection,
   listEffectiveModelProviders,
+  loadModelsDevCatalog,
   getToolPermission,
   listAgents,
   loginOpenAICodexBrowser,
@@ -35,6 +36,7 @@ import {
   removeAuth,
   runAgentTurn,
   runTool,
+  selectMagiEngineCandidates,
   selectReviewLenses,
   summarizeWorkspace,
   type ExecutableAgentAction,
@@ -624,7 +626,7 @@ export function AppController() {
         return;
       }
 
-      previewMagiContext();
+      await previewMagiContext();
       return;
     }
 
@@ -1538,35 +1540,80 @@ export function AppController() {
     addMessage(`Proposed patch saved as event #${event.sequence}. Use /apply_last_patch to apply.`);
   }
 
-  function previewMagiContext(): void {
+  async function previewMagiContext(): Promise<void> {
     if (!session) {
       addMessage("No saved session. Run a normal prompt first, or /resume an existing session.");
       return;
     }
 
-    const events = store.listEvents(session.id);
-    const latestUserMessage = [...events].reverse().find((event) => event.type === "user_message");
-    const requirementPayload = latestUserMessage?.payload as { content?: unknown } | undefined;
-    const requirement =
-      typeof requirementPayload?.content === "string"
-        ? requirementPayload.content
-        : "No user requirement yet.";
-    const sharedContextHistory = buildSharedContextHistory({ requirement, sessionEvents: events });
-    const summary = summarizeWorkspace({ workspaceRoot: config.workspaceRoot, events });
-    const lenses = selectReviewLenses({
-      riskLevel: summary.residualRisk,
-      changedFiles: summary.changedFiles,
-    });
+    beginBusy();
+    try {
+      const events = store.listEvents(session.id);
+      const latestUserMessage = [...events]
+        .reverse()
+        .find((event) => event.type === "user_message");
+      const requirementPayload = latestUserMessage?.payload as { content?: unknown } | undefined;
+      const requirement =
+        typeof requirementPayload?.content === "string"
+          ? requirementPayload.content
+          : "No user requirement yet.";
+      const sharedContextHistory = buildSharedContextHistory({
+        requirement,
+        sessionEvents: events,
+      });
+      const summary = summarizeWorkspace({ workspaceRoot: config.workspaceRoot, events });
+      const lenses = selectReviewLenses({
+        riskLevel: summary.residualRisk,
+        changedFiles: summary.changedFiles,
+      });
+      const catalogResult = await getModelsDevCatalogResult();
+      const effectiveProviders = listEffectiveModelProviders({
+        configProviders: config.modelProviders,
+        workspaceRoot: config.workspaceRoot,
+        ...(catalogResult.catalog === undefined ? {} : { modelsDevCatalog: catalogResult.catalog }),
+      });
+      const engineReadiness = selectMagiEngineCandidates({
+        providers: effectiveProviders,
+        selection: config.magi.selection,
+      });
 
-    addMessage(
-      [
-        "MAGI preview:",
-        `- shared context entries: ${sharedContextHistory.entries.length}`,
-        `- selected lenses: ${lenses.map((lens) => lens.id).join(", ")}`,
-        `- residual risk: ${summary.residualRisk}`,
-        "- core ready: shared context, lenses, review validation, vote validation, consensus matrix, decision trails",
-      ].join("\n"),
-    );
+      addMessage(
+        [
+          "MAGI preview:",
+          `- Models.dev: ${catalogResult.summary}`,
+          `- shared context entries: ${sharedContextHistory.entries.length}`,
+          `- selected lenses: ${lenses.map((lens) => lens.id).join(", ")}`,
+          `- residual risk: ${summary.residualRisk}`,
+          `- engine candidates: ${formatMagiEngineCandidates(engineReadiness.candidates)}`,
+          `- selected engines (${engineReadiness.readyCount}/${engineReadiness.requiredCount} required): ${formatMagiEngineCandidates(engineReadiness.selectedEngines)}`,
+          engineReadiness.unreadyConfiguredEngines.length === 0
+            ? "- unready configured engines: none"
+            : `- unready configured engines: ${formatMagiEngineCandidates(engineReadiness.unreadyConfiguredEngines)}`,
+          `- MAGI selection ready: ${engineReadiness.ready ? "yes" : "no"}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      addMessage(`MAGI preview error: ${formatError(error)}`);
+    } finally {
+      endBusy();
+    }
+  }
+
+  async function getModelsDevCatalogResult(): Promise<{
+    catalog?: Awaited<ReturnType<typeof loadModelsDevCatalog>>;
+    summary: string;
+  }> {
+    try {
+      const catalog = await loadModelsDevCatalog({ workspaceRoot: config.workspaceRoot });
+      const providers = Object.values(catalog);
+      const modelCount = providers.reduce(
+        (count, provider) => count + Object.keys(provider.models).length,
+        0,
+      );
+      return { catalog, summary: `${providers.length} providers, ${modelCount} models` };
+    } catch (error) {
+      return { summary: `unavailable (${formatError(error)})` };
+    }
   }
 
   function listRecentSessions(includeAll: boolean): void {
@@ -2502,6 +2549,26 @@ function formatEventPayload(event: SessionEvent): string {
 
 function truncate(value: string): string {
   return value.length > 2000 ? `${value.slice(0, 2000)}\n... truncated` : value;
+}
+
+function formatMagiEngineCandidates(
+  candidates: Array<{
+    family: string;
+    providerId: string;
+    model: string;
+    ready: boolean;
+    missingEnv?: string;
+  }>,
+): string {
+  if (candidates.length === 0) return "none";
+
+  return candidates
+    .map((candidate) =>
+      candidate.ready
+        ? `${candidate.family}=${candidate.providerId}/${candidate.model}`
+        : `${candidate.family}=${candidate.providerId}/${candidate.model} missing ${candidate.missingEnv}`,
+    )
+    .join(", ");
 }
 
 function formatToolResultMessage(result: ToolResult, input: unknown): string {
