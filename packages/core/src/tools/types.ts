@@ -10,6 +10,10 @@ export type ToolName =
   | "todowrite"
   | "question"
   | "skill"
+  | "lsp_symbols"
+  | "lsp_definition"
+  | "lsp_references"
+  | "lsp_hover"
   | "task"
   | "plan_exit";
 

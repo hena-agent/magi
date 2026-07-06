@@ -58,6 +58,16 @@ export function getOptionalStringField(
   return value;
 }
 
+export function getNumberField(input: Record<string, unknown>, field: string): number {
+  const value = input[field];
+
+  if (typeof value !== "number") {
+    throw new Error(`Tool input requires number field: ${field}`);
+  }
+
+  return value;
+}
+
 export function getOptionalBooleanField(
   input: Record<string, unknown>,
   field: string,

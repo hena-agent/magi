@@ -3,6 +3,7 @@ import { bashTool } from "./tools/bash.js";
 import { editTool } from "./tools/edit.js";
 import { globTool } from "./tools/glob.js";
 import { grepTool } from "./tools/grep.js";
+import { lspTool } from "./tools/lsp.js";
 import { readTool } from "./tools/read.js";
 import { questionTool } from "./tools/question.js";
 import { createOkResult, truncateToolPreview } from "./tools/result.js";
@@ -100,6 +101,11 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
         return createOkResult(call, questionTool(call.input));
       case "skill":
         return createOkResult(call, skillTool(call.input, runtime.workspaceRoot));
+      case "lsp_symbols":
+      case "lsp_definition":
+      case "lsp_references":
+      case "lsp_hover":
+        return createOkResult(call, await lspTool(call.name, call.input, runtime));
       case "task":
         throw new Error("task is executed by the agent runner, not the core tool runtime.");
       case "plan_exit":
