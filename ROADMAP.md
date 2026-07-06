@@ -8,7 +8,7 @@
 ## Current Focus
 - [x] Finish bootstrap self-hosting through Phase 3 MAGI core and Phase 3.5 session/runner parity basics.
 - [~] Finish remaining Phase 3.5 OpenCode-style tool parity before moving deeper into Phase 4 multi-engine support.
-- [ ] Next recommended implementation target: LSP tool support, after committing the current background `task` work.
+- [ ] Next recommended implementation target: `websearch` with explicit provider selection and network permission prompts.
 
 ## Phase 0: Project Skeleton
 - [x] Initialize pnpm workspace.
@@ -80,7 +80,8 @@
   - [x] Add foreground `task` tool for `general` and `explore` subagents using the existing agent runner.
   - [x] Add background `task` execution after foreground subagent behavior is stable.
   - [x] Add `plan_exit` plus OpenCode `plan-mode.txt` workflow, plan file path management, and plan-file-only write exceptions.
-  - [ ] Add LSP tool support for document symbols, definitions, references, hover, and call hierarchy.
+  - [x] Add LSP tool support for TypeScript/JavaScript document symbols, definitions, references, and hover.
+  - [ ] Add LSP call hierarchy after the first LSP tool pass is stable.
   - [ ] Add `websearch` with explicit provider selection, API key handling, and network permission prompts.
   - [x] Add internal invalid-tool handling for malformed provider tool calls.
   - [ ] Add plugin/custom tool registry only after sandbox and permission boundaries are designed.

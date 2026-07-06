@@ -9,7 +9,7 @@
 - Start with a direct terminal process, not a daemon/server architecture.
 - Use the current Ink TUI only as the bootstrap shell; defer rich terminal UX until the self-hosting agent loop works.
 - Use SQLite-backed append-only session events for persisted sessions, with draft sessions held in memory until the first successful assistant response.
-- Implement a typed tool registry with `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`, `webfetch`, `todowrite`, `question`, `skill`, `task`, and `plan_exit`.
+- Implement a typed tool registry with `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`, `webfetch`, `todowrite`, `question`, `skill`, TypeScript/JavaScript LSP tools, `task`, and `plan_exit`.
 - Use one primary model adapter first; MAGI multi-engine review comes after the normal coding loop works.
 - Keep interfaces narrow so the bootstrap loop can later be replaced by a richer session runner.
 
@@ -23,6 +23,7 @@
 - Patch applier: applies controlled file edits and records changed paths.
 - Verification runner: runs configured lint/typecheck/test/build commands when available.
 - Subagent runner: launches foreground and background subagent tasks using the same agent loop while preventing nested task recursion.
+- LSP adapter: launches `typescript-language-server` on demand for TypeScript/JavaScript document symbols, definitions, references, and hover information.
 - Sandbox runner: runs risky verification in an isolated environment when available.
 - Model adapter layer: uses Vercel AI SDK for provider calls, streaming, structured outputs, and tool-capable model interactions.
 - MCP integration layer: uses the official MCP SDK to connect external tools and expose MAGI tools where useful.

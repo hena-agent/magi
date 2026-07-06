@@ -193,6 +193,10 @@ Inside the TUI:
 /grep Phase ROADMAP.md
 /webfetch https://example.com markdown
 /skill frontend-design
+/lsp_symbols packages/core/src/tools.ts
+/lsp_definition packages/core/src/tools.ts 78 23
+/lsp_references packages/core/src/tools.ts 78 23
+/lsp_hover packages/core/src/tools.ts 78 23
 /bash pnpm test
 /apply_patch path/to/change.patch
 /verify
@@ -214,6 +218,7 @@ Notes:
 - `/plan` switches to the read-only planning agent. The plan agent can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
 - `/build` switches back to the default build agent.
 - `/read`, `/glob`, `/grep`, `/todowrite`, `/question`, and `/skill` are read/planning tools.
+- `/lsp_symbols`, `/lsp_definition`, `/lsp_references`, and `/lsp_hover` are TypeScript/JavaScript LSP read tools. Position inputs are 1-based `line` and `character` values.
 - `/webfetch` is a network tool. It returns response metadata, markdown/text/html content, JSON pretty-printing, unsupported media notices, and truncation metadata.
 - `/bash` is a shell tool and follows the configured shell permission policy.
 - `/apply_patch` applies a `git apply` compatible patch file and follows the configured write permission policy.
@@ -247,4 +252,4 @@ The database is ignored by git. It contains sessions and append-only session eve
 
 ## Current Status
 
-Phase 0 through Phase 3 are complete. Phase 3.5 is partially complete: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `skill`, foreground/background `task`, and invalid-tool handling are implemented. Remaining Phase 3.5 work includes LSP support, `websearch`, broader continuation/compaction tests, and custom plugin/tool registry design after sandbox boundaries are clearer.
+Phase 0 through Phase 3 are complete. Phase 3.5 is partially complete: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `skill`, foreground/background `task`, invalid-tool handling, and TypeScript/JavaScript LSP tools are implemented. Remaining Phase 3.5 work includes LSP call hierarchy, `websearch`, broader continuation/compaction tests, and custom plugin/tool registry design after sandbox boundaries are clearer.
