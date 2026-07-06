@@ -1,11 +1,16 @@
 import { Box, Text } from "ink";
-import type { PendingPermission, PendingQuestion } from "./app-controller.js";
+import type { PendingPermission, PendingQuestion, PendingSelector } from "./app-controller.js";
 
 export function OverlayArea(props: {
   pendingPermission: PendingPermission | undefined;
   pendingQuestion: PendingQuestion | undefined;
+  pendingSelector: PendingSelector | undefined;
   questionAnswer: string;
 }) {
+  if (props.pendingSelector) {
+    return <SelectorOverlay selector={props.pendingSelector} />;
+  }
+
   if (props.pendingQuestion) {
     return (
       <QuestionOverlay pendingQuestion={props.pendingQuestion} answer={props.questionAnswer} />
@@ -17,6 +22,30 @@ export function OverlayArea(props: {
   }
 
   return null;
+}
+
+function SelectorOverlay(props: { selector: PendingSelector }) {
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>
+        {props.selector.title}
+      </Text>
+      {props.selector.subtitle ? <Text dimColor>{props.selector.subtitle}</Text> : null}
+      {props.selector.items.map((item, index) => {
+        const selected = index === props.selector.selectedIndex;
+        return (
+          <Text
+            key={item.value}
+            color={selected ? "black" : undefined}
+            backgroundColor={selected ? "cyan" : undefined}
+          >
+            {`${selected ? "›" : " "} ${item.label}${item.description ? `  ${item.description}` : ""}`}
+          </Text>
+        );
+      })}
+      <Text dimColor>↑/↓ select enter confirm esc cancel</Text>
+    </Box>
+  );
 }
 
 function PermissionOverlay(props: { pendingPermission: PendingPermission }) {

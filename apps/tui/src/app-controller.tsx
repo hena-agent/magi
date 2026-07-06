@@ -102,6 +102,20 @@ export type PendingQuestion = {
   resolve: (answer: string | undefined) => void;
 };
 
+export type SelectorItem = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+export type PendingSelector = {
+  title: string;
+  subtitle?: string;
+  items: SelectorItem[];
+  selectedIndex: number;
+  onSelect: (item: SelectorItem) => void;
+};
+
 export type TodoItem = {
   content: string;
   status: string;
@@ -346,6 +360,7 @@ export function AppController() {
   const [activeStatus, setActiveStatus] = useState("Ready");
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
+  const [pendingSelector, setPendingSelector] = useState<PendingSelector>();
   const [questionAnswer, setQuestionAnswer] = useState("");
   const [todos, setTodos] = useState<TodoItem[]>(() =>
     getLatestTodos(initialSession.session ? store.listEvents(initialSession.session.id) : []),
@@ -353,7 +368,9 @@ export function AppController() {
   const [busyDepth, setBusyDepth] = useState(0);
   const isBusy = busyDepth > 0;
   const slashCommandSuggestions =
-    pendingPermission || pendingQuestion ? [] : getSlashCommandSuggestions(prompt);
+    pendingPermission || pendingQuestion || pendingSelector
+      ? []
+      : getSlashCommandSuggestions(prompt);
 
   useEffect(() => {
     setPromptCursor((cursor) => Math.min(cursor, prompt.length));
@@ -407,6 +424,48 @@ export function AppController() {
           void resolvePermission(true);
         } else if (input.toLowerCase() === "n" || key.escape) {
           void resolvePermission(false);
+        }
+
+        return;
+      }
+
+      if (pendingSelector) {
+        if (key.escape) {
+          setPendingSelector(undefined);
+          return;
+        }
+
+        if (key.upArrow) {
+          setPendingSelector((current) =>
+            current
+              ? {
+                  ...current,
+                  selectedIndex:
+                    current.selectedIndex <= 0
+                      ? current.items.length - 1
+                      : current.selectedIndex - 1,
+                }
+              : current,
+          );
+          return;
+        }
+
+        if (key.downArrow) {
+          setPendingSelector((current) =>
+            current
+              ? { ...current, selectedIndex: (current.selectedIndex + 1) % current.items.length }
+              : current,
+          );
+          return;
+        }
+
+        if (key.return) {
+          const selectedItem = pendingSelector.items[pendingSelector.selectedIndex];
+          setPendingSelector(undefined);
+          if (selectedItem) {
+            pendingSelector.onSelect(selectedItem);
+          }
+          return;
         }
 
         return;
@@ -807,7 +866,7 @@ export function AppController() {
     }
 
     if (command === "sessions") {
-      listRecentSessions(args[0] === "all" || args[0] === "--all");
+      showSessionSelector(args[0] === "all" || args[0] === "--all");
       return;
     }
 
@@ -842,7 +901,7 @@ export function AppController() {
     }
 
     if (command === "agent") {
-      switchAgent(args.join(" ").trim());
+      showAgentSelectorOrSwitch(args.join(" ").trim());
       return;
     }
 
@@ -1896,9 +1955,47 @@ export function AppController() {
     }
   }
 
-  function listRecentSessions(includeAll: boolean): void {
-    const sessions = store.listSessions({ workspaceRoot: config.workspaceRoot, limit: 50 });
-    const visibleSessions = sessions
+  function showSessionSelector(includeAll: boolean): void {
+    if (!canSwitchSessions()) {
+      return;
+    }
+
+    const visibleSessions = getRecentSessionOptions(includeAll);
+
+    if (visibleSessions.length === 0) {
+      addMessage(
+        includeAll
+          ? "No sessions found."
+          : "No meaningful sessions found. Use /sessions all to show empty and command-only sessions.",
+      );
+      return;
+    }
+
+    setPendingSelector({
+      title: includeAll ? "Recent Sessions" : "Recent Meaningful Sessions",
+      subtitle: "Select a session to resume.",
+      selectedIndex: Math.max(
+        0,
+        visibleSessions.findIndex((candidate) => candidate.session.id === session?.id),
+      ),
+      items: visibleSessions.map(({ session: listedSession, events, displayTitle }) => ({
+        value: listedSession.id,
+        label: `${listedSession.id === session?.id ? "* " : ""}${displayTitle}`,
+        description: `${listedSession.id.slice(0, 8)}  ${events.length} events  ${listedSession.updatedAt}`,
+      })),
+      onSelect(item) {
+        resumeSession(item.value);
+      },
+    });
+  }
+
+  function getRecentSessionOptions(includeAll: boolean): Array<{
+    session: Session;
+    events: SessionEvent[];
+    displayTitle: string;
+  }> {
+    return store
+      .listSessions({ workspaceRoot: config.workspaceRoot, limit: 50 })
       .map((listedSession) => {
         const events = store.listEvents(listedSession.id);
 
@@ -1910,36 +2007,6 @@ export function AppController() {
       })
       .filter((listedSession) => includeAll || isMeaningfulSession(listedSession.displayTitle))
       .slice(0, 10);
-
-    if (visibleSessions.length === 0) {
-      addMessage(
-        includeAll
-          ? "No sessions found."
-          : "No meaningful sessions found. Use /sessions all to show empty and command-only sessions.",
-      );
-      return;
-    }
-
-    const hiddenCount = includeAll ? 0 : sessions.length - visibleSessions.length;
-
-    addMessage(
-      [
-        includeAll ? "Recent sessions:" : "Recent meaningful sessions:",
-        ...visibleSessions.map(({ session: listedSession, events, displayTitle }, index) => {
-          const currentMarker = listedSession.id === session?.id ? "* " : "";
-
-          return [
-            `${index + 1}. ${currentMarker}${displayTitle}`,
-            `   id: ${listedSession.id}`,
-            `   updated: ${listedSession.updatedAt}`,
-            `   events: ${events.length}`,
-          ].join("\n");
-        }),
-        ...(hiddenCount > 0
-          ? [`Hidden ${hiddenCount} empty/command-only sessions. Use /sessions all to show them.`]
-          : []),
-      ].join("\n"),
-    );
   }
 
   function resumeSession(rawSessionSelector: string): void {
@@ -2157,7 +2224,12 @@ export function AppController() {
   function handleModelCommand(args: string[]): void {
     const [subcommand = ""] = args;
 
-    if (subcommand.length === 0 || subcommand === "status") {
+    if (subcommand.length === 0) {
+      showModelSelector();
+      return;
+    }
+
+    if (subcommand === "status") {
       addMessage(formatModelStatus(activeProviderId));
       return;
     }
@@ -2175,6 +2247,36 @@ export function AppController() {
     }
 
     switchModelProvider(subcommand);
+  }
+
+  function showModelSelector(): void {
+    if (isBusy || pendingPermission) {
+      addMessage("Cannot switch models while a command is running or waiting for permission.");
+      return;
+    }
+
+    if (effectiveModelProviders.length === 0) {
+      addMessage("No model providers configured.");
+      return;
+    }
+
+    const activeId = activeProviderId ?? effectiveModelProviders[0]?.id;
+    setPendingSelector({
+      title: "Select Model",
+      subtitle: "Use /model status for the detailed provider list.",
+      selectedIndex: Math.max(
+        0,
+        effectiveModelProviders.findIndex((provider) => provider.id === activeId),
+      ),
+      items: effectiveModelProviders.map((provider) => ({
+        value: provider.id,
+        label: `${provider.id === activeId ? "* " : ""}${provider.id}`,
+        description: `${provider.model}  ${provider.provider}  ${provider.source}`,
+      })),
+      onSelect(item) {
+        switchModelProvider(item.value);
+      },
+    });
   }
 
   function showModeStatus(): void {
@@ -2294,6 +2396,37 @@ export function AppController() {
     });
     addMessage(`Switched agent: ${agent.id}`);
     return agent;
+  }
+
+  function showAgentSelectorOrSwitch(agentId: string): AgentInfo | undefined {
+    if (agentId.length > 0) {
+      return switchAgent(agentId);
+    }
+
+    if (isBusy || pendingPermission) {
+      addMessage("Cannot switch agents while a command is running or waiting for permission.");
+      return undefined;
+    }
+
+    const agents = listAgents().filter((agent) => !agent.hidden && agent.mode === "primary");
+    setPendingSelector({
+      title: "Select Agent",
+      subtitle: "Choose the primary agent for the next prompt.",
+      selectedIndex: Math.max(
+        0,
+        agents.findIndex((agent) => agent.id === activeAgent.id),
+      ),
+      items: agents.map((agent) => ({
+        value: agent.id,
+        label: `${agent.id === activeAgent.id ? "* " : ""}${agent.id}`,
+        description: `${agent.mode}  ${agent.description}`,
+      })),
+      onSelect(item) {
+        switchAgent(item.value);
+      },
+    });
+
+    return undefined;
   }
 
   function showQueuedPrompts(): void {
@@ -2598,6 +2731,7 @@ export function AppController() {
       mode={task.mode}
       pendingPermission={pendingPermission}
       pendingQuestion={pendingQuestion}
+      pendingSelector={pendingSelector}
       planFilePath={activeAgent.id === "plan" ? getPlanFilePath() : undefined}
       prompt={prompt}
       promptCursor={promptCursor}

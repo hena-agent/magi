@@ -3,6 +3,7 @@ import type {
   DisplayMessage,
   PendingPermission,
   PendingQuestion,
+  PendingSelector,
   SlashCommandInfo,
 } from "./app-controller.js";
 import { CommandSuggestions } from "./command-suggestions.js";
@@ -23,6 +24,7 @@ type AppViewProps = {
   mode: string;
   pendingPermission: PendingPermission | undefined;
   pendingQuestion: PendingQuestion | undefined;
+  pendingSelector: PendingSelector | undefined;
   planFilePath: string | undefined;
   prompt: string;
   promptCursor: number;
@@ -51,17 +53,26 @@ export function AppView(props: AppViewProps) {
       <OverlayArea
         pendingPermission={props.pendingPermission}
         pendingQuestion={props.pendingQuestion}
+        pendingSelector={props.pendingSelector}
         questionAnswer={props.questionAnswer}
       />
       <CommandSuggestions
         commands={props.slashCommandSuggestions}
         selectedIndex={props.slashCommandSelectionIndex}
-        hidden={props.pendingPermission !== undefined || props.pendingQuestion !== undefined}
+        hidden={
+          props.pendingPermission !== undefined ||
+          props.pendingQuestion !== undefined ||
+          props.pendingSelector !== undefined
+        }
       />
       <Composer
         prompt={props.prompt}
         cursor={props.promptCursor}
-        disabled={props.pendingPermission !== undefined || props.pendingQuestion !== undefined}
+        disabled={
+          props.pendingPermission !== undefined ||
+          props.pendingQuestion !== undefined ||
+          props.pendingSelector !== undefined
+        }
       />
       <FooterBar
         activeStatus={props.activeStatus}
