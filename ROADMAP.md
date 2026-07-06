@@ -8,7 +8,7 @@
 ## Current Focus
 - [x] Finish bootstrap self-hosting through Phase 3 MAGI core and Phase 3.5 session/runner parity basics.
 - [~] Finish remaining Phase 3.5 OpenCode-style tool parity before moving deeper into Phase 4 multi-engine support.
-- [ ] Next recommended implementation target: `websearch` with explicit provider selection and network permission prompts.
+- [ ] Next recommended implementation target: LSP call hierarchy or Phase 3.5 session/continuation test hardening.
 
 ## Phase 0: Project Skeleton
 - [x] Initialize pnpm workspace.
@@ -82,7 +82,7 @@
   - [x] Add `plan_exit` plus OpenCode `plan-mode.txt` workflow, plan file path management, and plan-file-only write exceptions.
   - [x] Add LSP tool support for TypeScript/JavaScript document symbols, definitions, references, and hover.
   - [ ] Add LSP call hierarchy after the first LSP tool pass is stable.
-  - [ ] Add `websearch` with explicit provider selection, API key handling, and network permission prompts.
+  - [x] Add `websearch` with Exa, Parallel, and Brave provider selection, API key handling, and network permission prompts.
   - [x] Add internal invalid-tool handling for malformed provider tool calls.
   - [ ] Add plugin/custom tool registry only after sandbox and permission boundaries are designed.
 - [~] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.

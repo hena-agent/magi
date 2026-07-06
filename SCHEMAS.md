@@ -85,6 +85,7 @@ type ToolName =
   | "apply_patch"
   | "bash"
   | "webfetch"
+  | "websearch"
   | "todowrite"
   | "question"
   | "skill"

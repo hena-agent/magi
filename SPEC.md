@@ -30,6 +30,7 @@
 - File editing through controlled edit/write/patch tools.
 - Shell command execution with permission checks.
 - Network fetch through explicit permission-gated `webfetch` with response metadata and truncation.
+- Web search through explicit permission-gated `websearch` with Exa, Parallel, and Brave providers.
 - TypeScript/JavaScript repo awareness through LSP document symbols, definitions, references, and hover tools.
 - OpenCode-style planning helpers: persisted todos, interactive questions, skill loading, foreground/background subagents, and plan/build agent workflow.
 - Git-aware workflow that can inspect status/diff/log without destructive defaults.
@@ -72,6 +73,6 @@
 
 ## Open Questions
 - Whether sandbox execution starts as local Docker only or includes a remote backend later.
-- Which provider should back initial `websearch`, and how provider-specific result formats should be normalized.
 - Whether LSP call hierarchy should remain TypeScript-only or wait for a broader multi-language LSP adapter.
+- How far plugin/custom tool execution should go before sandbox and permission boundaries are hardened.
 - How background task results should optionally rejoin an active parent agent loop without corrupting prompt queue semantics.
