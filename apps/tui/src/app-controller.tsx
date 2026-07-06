@@ -63,6 +63,19 @@ import {
 export type DisplayMessage = {
   id: string;
   content: string;
+  detail?: string;
+  kind?: "user" | "assistant" | "tool" | "status" | "error" | "system";
+  title?: string;
+  tone?: "normal" | "muted" | "success" | "warning" | "danger";
+  expandable?: boolean;
+  collapsed?: boolean;
+  metadata?: {
+    toolName?: string;
+    durationMs?: number;
+    target?: string;
+    countLabel?: string;
+    summary?: string;
+  };
 };
 
 export type PendingPermission = {
@@ -278,6 +291,7 @@ function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
 }
 
 const defaultSessionTitle = "MAGI TUI session";
+const transcriptLineLimit = 28;
 
 type InitialSessionState = {
   session?: Session;
@@ -310,6 +324,10 @@ export function AppController() {
   );
   const effectiveModelProviders = getEffectiveProviders();
   const [prompt, setPrompt] = useState("");
+  const [promptCursor, setPromptCursor] = useState(0);
+  const promptHistoryRef = useRef<string[]>([]);
+  const promptHistoryIndexRef = useRef<number | undefined>(undefined);
+  const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [
     {
       id: "session-start",
@@ -322,6 +340,10 @@ export function AppController() {
       ? []
       : sessionEventsToDisplayMessages(store.listEvents(initialSession.session.id), 30)),
   ]);
+  const [transcriptScrollOffset, setTranscriptScrollOffset] = useState(0);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(() => new Set());
+  const [activeStatus, setActiveStatus] = useState("Ready");
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
   const [questionAnswer, setQuestionAnswer] = useState("");
@@ -332,6 +354,19 @@ export function AppController() {
   const isBusy = busyDepth > 0;
   const slashCommandSuggestions =
     pendingPermission || pendingQuestion ? [] : getSlashCommandSuggestions(prompt);
+
+  useEffect(() => {
+    setPromptCursor((cursor) => Math.min(cursor, prompt.length));
+  }, [prompt.length]);
+
+  useEffect(() => {
+    setTranscriptScrollOffset((offset) =>
+      Math.max(0, Math.min(getTranscriptMaxScrollOffset(messages, expandedMessageIds), offset)),
+    );
+    if (selectedMessageId === undefined && messages.length > 0) {
+      setSelectedMessageId(messages.at(-1)?.id);
+    }
+  }, [messages, selectedMessageId, expandedMessageIds]);
 
   function getEffectiveProviders(): EffectiveModelProvider[] {
     return listEffectiveModelProviders({
@@ -405,11 +440,107 @@ export function AppController() {
         return;
       }
 
+      if (key.tab && slashCommandSuggestions.length > 0) {
+        const selected = slashCommandSuggestions[slashSelectionIndex] ?? slashCommandSuggestions[0];
+        if (selected) {
+          const completed = `/${selected.name} `;
+          setPromptWithCursor(completed);
+        }
+        return;
+      }
+
+      if (key.upArrow) {
+        if (slashCommandSuggestions.length > 0) {
+          setSlashSelectionIndex((index) =>
+            index <= 0 ? slashCommandSuggestions.length - 1 : index - 1,
+          );
+          return;
+        }
+        showPreviousPromptHistory();
+        return;
+      }
+
+      if (key.downArrow) {
+        if (slashCommandSuggestions.length > 0) {
+          setSlashSelectionIndex((index) => (index + 1) % slashCommandSuggestions.length);
+          return;
+        }
+        showNextPromptHistory();
+        return;
+      }
+
+      if (key.pageUp) {
+        scrollTranscript(8);
+        return;
+      }
+
+      if (key.pageDown) {
+        scrollTranscript(-8);
+        return;
+      }
+
+      if (key.home) {
+        scrollTranscriptToStart();
+        return;
+      }
+
+      if (key.end) {
+        scrollTranscriptToEnd();
+        return;
+      }
+
+      if (prompt.length === 0 && input === "k") {
+        selectTranscriptMessage(-1);
+        return;
+      }
+
+      if (prompt.length === 0 && input === "j") {
+        selectTranscriptMessage(1);
+        return;
+      }
+
+      if (prompt.length === 0 && (input === " " || key.return)) {
+        toggleSelectedMessageExpansion();
+        return;
+      }
+
+      if (key.leftArrow || (input === "b" && key.ctrl)) {
+        setPromptCursor((cursor) => Math.max(0, cursor - 1));
+        return;
+      }
+
+      if (key.rightArrow || (input === "f" && key.ctrl)) {
+        setPromptCursor((cursor) => Math.min(prompt.length, cursor + 1));
+        return;
+      }
+
+      if (input === "a" && key.ctrl) {
+        setPromptCursor(0);
+        return;
+      }
+
+      if (input === "e" && key.ctrl) {
+        setPromptCursor(prompt.length);
+        return;
+      }
+
+      if (input === "u" && key.ctrl) {
+        setPromptWithCursor("");
+        promptHistoryIndexRef.current = undefined;
+        return;
+      }
+
+      if (input === "w" && key.ctrl) {
+        deletePreviousPromptWord();
+        return;
+      }
+
       if (key.return) {
         const content = prompt.trim();
 
         if (content.length > 0) {
-          setPrompt("");
+          setPromptWithCursor("");
+          addPromptHistory(content);
           void handleSubmittedPrompt(content);
         }
 
@@ -417,18 +548,164 @@ export function AppController() {
       }
 
       if (key.backspace || key.delete) {
-        setPrompt((currentPrompt) => currentPrompt.slice(0, -1));
+        deletePromptCharacter();
         return;
       }
 
       if (input.length > 0 && !key.ctrl && !key.meta) {
-        setPrompt((currentPrompt) => currentPrompt + input);
+        insertPromptText(input);
       }
     },
     {
       isActive: canReadInput,
     },
   );
+
+  function setPromptWithCursor(nextPrompt: string, nextCursor: number = nextPrompt.length): void {
+    setPrompt(nextPrompt);
+    setPromptCursor(Math.max(0, Math.min(nextPrompt.length, nextCursor)));
+    setSlashSelectionIndex(0);
+  }
+
+  function insertPromptText(text: string): void {
+    const nextPrompt = `${prompt.slice(0, promptCursor)}${text}${prompt.slice(promptCursor)}`;
+    setPromptWithCursor(nextPrompt, promptCursor + text.length);
+    promptHistoryIndexRef.current = undefined;
+  }
+
+  function deletePromptCharacter(): void {
+    if (promptCursor <= 0) return;
+    const nextPrompt = `${prompt.slice(0, promptCursor - 1)}${prompt.slice(promptCursor)}`;
+    setPromptWithCursor(nextPrompt, promptCursor - 1);
+    promptHistoryIndexRef.current = undefined;
+  }
+
+  function deletePreviousPromptWord(): void {
+    if (promptCursor <= 0) return;
+    const beforeCursor = prompt.slice(0, promptCursor);
+    const afterCursor = prompt.slice(promptCursor);
+    const trimmedEnd = beforeCursor.replace(/\s+$/, "");
+    const nextBeforeCursor = trimmedEnd.replace(/\S+$/, "");
+    const nextPrompt = `${nextBeforeCursor}${afterCursor}`;
+    setPromptWithCursor(nextPrompt, nextBeforeCursor.length);
+    promptHistoryIndexRef.current = undefined;
+  }
+
+  function addPromptHistory(content: string): void {
+    promptHistoryRef.current = [
+      ...promptHistoryRef.current.filter((entry) => entry !== content),
+      content,
+    ].slice(-50);
+    promptHistoryIndexRef.current = undefined;
+  }
+
+  function showPreviousPromptHistory(): void {
+    if (promptHistoryRef.current.length === 0) return;
+    const currentIndex = promptHistoryIndexRef.current ?? promptHistoryRef.current.length;
+    const nextIndex = Math.max(0, currentIndex - 1);
+    promptHistoryIndexRef.current = nextIndex;
+    setPromptWithCursor(promptHistoryRef.current[nextIndex] ?? "");
+  }
+
+  function showNextPromptHistory(): void {
+    const currentIndex = promptHistoryIndexRef.current;
+    if (currentIndex === undefined) return;
+    const nextIndex = currentIndex + 1;
+    if (nextIndex >= promptHistoryRef.current.length) {
+      promptHistoryIndexRef.current = undefined;
+      setPromptWithCursor("");
+      return;
+    }
+    promptHistoryIndexRef.current = nextIndex;
+    setPromptWithCursor(promptHistoryRef.current[nextIndex] ?? "");
+  }
+
+  function scrollTranscript(delta: number): void {
+    setTranscriptScrollOffset((offset) => clampTranscriptScrollOffset(offset + delta));
+  }
+
+  function scrollTranscriptToStart(): void {
+    setTranscriptScrollOffset(
+      clampTranscriptScrollOffset(getTranscriptLineCount(messages, expandedMessageIds)),
+    );
+  }
+
+  function scrollTranscriptToEnd(): void {
+    setTranscriptScrollOffset(0);
+  }
+
+  function selectTranscriptMessage(direction: number): void {
+    if (messages.length === 0) return;
+    const currentIndex = selectedMessageId
+      ? messages.findIndex((message) => message.id === selectedMessageId)
+      : messages.length - 1;
+    const nextIndex = Math.max(0, Math.min(messages.length - 1, currentIndex + direction));
+    const nextMessageId = messages[nextIndex]?.id;
+    setSelectedMessageId(nextMessageId);
+    if (nextMessageId) {
+      keepTranscriptMessageVisible(nextMessageId, expandedMessageIds);
+    }
+  }
+
+  function toggleSelectedMessageExpansion(): void {
+    if (!selectedMessageId) return;
+    const selected = messages.find((message) => message.id === selectedMessageId);
+    if (!selected?.expandable) return;
+    setExpandedMessageIds((expandedIds) => {
+      const next = new Set(expandedIds);
+      if (next.has(selectedMessageId)) {
+        next.delete(selectedMessageId);
+      } else {
+        next.add(selectedMessageId);
+      }
+      setTranscriptScrollOffset((offset) =>
+        clampTranscriptScrollOffsetFor(
+          next,
+          keepTranscriptMessageOffsetVisible(selectedMessageId, next, offset),
+        ),
+      );
+      return next;
+    });
+  }
+
+  function clampTranscriptScrollOffset(offset: number): number {
+    return clampTranscriptScrollOffsetFor(expandedMessageIds, offset);
+  }
+
+  function clampTranscriptScrollOffsetFor(expandedIds: Set<string>, offset: number): number {
+    return Math.max(0, Math.min(getTranscriptMaxScrollOffset(messages, expandedIds), offset));
+  }
+
+  function keepTranscriptMessageVisible(messageId: string, expandedIds: Set<string>): void {
+    setTranscriptScrollOffset((offset) =>
+      clampTranscriptScrollOffset(
+        keepTranscriptMessageOffsetVisible(messageId, expandedIds, offset),
+      ),
+    );
+  }
+
+  function keepTranscriptMessageOffsetVisible(
+    messageId: string,
+    expandedIds: Set<string>,
+    offset: number,
+  ): number {
+    const range = getTranscriptMessageLineRange(messages, expandedIds, messageId);
+    if (!range) return offset;
+
+    const totalLines = getTranscriptLineCount(messages, expandedIds);
+    const visibleEnd = totalLines - offset;
+    const visibleStart = Math.max(0, visibleEnd - transcriptLineLimit);
+
+    if (range.start < visibleStart) {
+      return totalLines - Math.min(totalLines, range.start + transcriptLineLimit);
+    }
+
+    if (range.end > visibleEnd) {
+      return totalLines - range.end;
+    }
+
+    return offset;
+  }
 
   async function handleSubmittedPrompt(content: string): Promise<void> {
     if (content.startsWith("/")) {
@@ -1349,6 +1626,7 @@ export function AppController() {
     agent: AgentInfo = activeAgent,
   ): Promise<ToolResult> {
     beginBusy();
+    setActiveStatus(`Running ${formatToolCallSummary(call)}`);
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     appendSessionEvent({ type: "tool_call", payload: call });
@@ -1370,6 +1648,7 @@ export function AppController() {
         setTodos(nextTodos);
         appendSessionEvent({ type: "todo_update", payload: { todos: nextTodos } });
       }
+      const durationMs = Date.now() - startedAtMs;
       appendSessionEvent({ type: "tool_result", payload: result });
       appendSessionEvent({
         type: "tool_settlement",
@@ -1379,15 +1658,16 @@ export function AppController() {
             status: result.ok ? "succeeded" : "failed",
             startedAt,
             endedAt: new Date().toISOString(),
-            durationMs: Date.now() - startedAtMs,
+            durationMs,
             result,
           }),
           agentId: agent.id,
         },
       });
-      addMessage(formatToolResultMessage(result, call.input));
+      addDisplayMessage(formatToolResultDisplayMessage(result, call.input, { durationMs }));
       return result;
     } finally {
+      setActiveStatus("Ready");
       endBusy();
     }
   }
@@ -2136,6 +2416,7 @@ export function AppController() {
       type: event.type,
       payload: { ...event.payload, agentId: agent.id },
     });
+    updateActiveStatusFromAgentEvent(event);
   }
 
   function appendAgentTurnEventToSession(
@@ -2149,6 +2430,25 @@ export function AppController() {
       type: event.type,
       payload: { ...event.payload, agentId: agent.id, taskId, background: true },
     });
+  }
+
+  function updateActiveStatusFromAgentEvent(event: AgentTurnEvent): void {
+    switch (event.type) {
+      case "assistant_started":
+        setActiveStatus("Thinking...");
+        return;
+      case "provider_error":
+        setActiveStatus("Provider error");
+        return;
+      case "agent_step_ended": {
+        const payload = event.payload as { status?: unknown };
+        setActiveStatus(`Step ${String(payload.status ?? "ended")}`);
+        return;
+      }
+      case "agent_step_started":
+        setActiveStatus("Preparing next step...");
+        return;
+    }
   }
 
   function getSessionDisplayTitle(listedSession: Session, events: SessionEvent[]): string {
@@ -2264,7 +2564,17 @@ export function AppController() {
   }
 
   function addMessage(content: string, id: string = crypto.randomUUID()): void {
-    setMessages((currentMessages) => [...currentMessages, { id, content }]);
+    addDisplayMessage({ id, content });
+  }
+
+  function addDisplayMessage(message: DisplayMessage): void {
+    setMessages((currentMessages) => [...currentMessages, message]);
+    setSelectedMessageId(message.id);
+    setTranscriptScrollOffset((offset) =>
+      offset === 0
+        ? 0
+        : offset + getDisplayMessageLineCount(message, expandedMessageIds.has(message.id)),
+    );
   }
 
   function beginBusy(): void {
@@ -2281,6 +2591,8 @@ export function AppController() {
       activeProviderId={activeProviderId}
       canReadInput={canReadInput}
       effectiveModelProviderId={effectiveModelProviders[0]?.id}
+      expandedMessageIds={expandedMessageIds}
+      activeStatus={activeStatus}
       isBusy={isBusy}
       messages={messages}
       mode={task.mode}
@@ -2288,11 +2600,16 @@ export function AppController() {
       pendingQuestion={pendingQuestion}
       planFilePath={activeAgent.id === "plan" ? getPlanFilePath() : undefined}
       prompt={prompt}
+      promptCursor={promptCursor}
       questionAnswer={questionAnswer}
+      queuedPromptCount={queuedPromptsRef.current.length}
       riskLevel={task.riskLevel}
+      selectedMessageId={selectedMessageId}
       sessionId={session?.id}
+      slashCommandSelectionIndex={slashSelectionIndex}
       slashCommandSuggestions={slashCommandSuggestions}
       todoOpenCount={todos.filter((todo) => todo.status !== "completed").length}
+      transcriptScrollOffset={transcriptScrollOffset}
       workspaceRoot={config.workspaceRoot}
     />
   );
@@ -2434,6 +2751,59 @@ function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): 
   return displayableMessages.slice(-limit);
 }
 
+function getTranscriptMaxScrollOffset(
+  messages: DisplayMessage[],
+  expandedIds: Set<string>,
+): number {
+  return Math.max(0, getTranscriptLineCount(messages, expandedIds) - transcriptLineLimit);
+}
+
+function getTranscriptLineCount(messages: DisplayMessage[], expandedIds: Set<string>): number {
+  return messages.reduce(
+    (count, message) => count + getDisplayMessageLineCount(message, expandedIds.has(message.id)),
+    0,
+  );
+}
+
+function getTranscriptMessageLineRange(
+  messages: DisplayMessage[],
+  expandedIds: Set<string>,
+  messageId: string,
+): { start: number; end: number } | undefined {
+  let start = 0;
+
+  for (const message of messages) {
+    const lineCount = getDisplayMessageLineCount(message, expandedIds.has(message.id));
+    const end = start + lineCount;
+    if (message.id === messageId) {
+      return { start, end };
+    }
+
+    start = end;
+  }
+
+  return undefined;
+}
+
+function getDisplayMessageLineCount(message: DisplayMessage, expanded = false): number {
+  const bodyLines = splitDisplayLines(message.content).length;
+  const metadataLines = [
+    message.metadata?.target,
+    message.metadata?.countLabel,
+    message.metadata?.summary,
+  ].filter((value) => typeof value === "string" && value.length > 0).length;
+  const detailLines =
+    message.expandable && expanded && message.detail ? splitDisplayLines(message.detail).length : 0;
+  const collapsedHintLines = message.expandable && !expanded ? 1 : 0;
+
+  return 2 + bodyLines + metadataLines + detailLines + collapsedHintLines;
+}
+
+function splitDisplayLines(value: string): string[] {
+  const lines = value.split("\n");
+  return lines.length === 0 ? [""] : lines;
+}
+
 function formatEventPayload(event: SessionEvent): string {
   switch (event.type) {
     case "user_message":
@@ -2569,6 +2939,140 @@ function formatMagiEngineCandidates(
         : `${candidate.family}=${candidate.providerId}/${candidate.model} missing ${candidate.missingEnv}`,
     )
     .join(", ");
+}
+
+type ToolDisplaySummary = {
+  content: string;
+  target?: string;
+  countLabel?: string;
+  summary?: string;
+};
+
+function formatToolResultDisplayMessage(
+  result: ToolResult,
+  input: unknown,
+  metadata: { durationMs?: number } = {},
+): DisplayMessage {
+  const summary = formatToolResultSummary(result, input);
+  const detail = result.ok ? result.output.trim() : (result.error ?? result.output).trim();
+  const expandable = detail.length > 0;
+
+  return {
+    id: result.id,
+    kind: result.ok ? "tool" : "error",
+    title: `${result.ok ? "✓" : "✕"} ${result.name}`,
+    content: summary.content,
+    ...(expandable ? { detail, expandable: true, collapsed: true } : {}),
+    tone: result.ok ? "success" : "danger",
+    metadata: {
+      toolName: result.name,
+      ...(metadata.durationMs !== undefined ? { durationMs: metadata.durationMs } : {}),
+      ...(summary.target ? { target: summary.target } : {}),
+      ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
+      ...(summary.summary ? { summary: summary.summary } : {}),
+    },
+  };
+}
+
+function formatToolResultSummary(result: ToolResult, input: unknown): ToolDisplaySummary {
+  if (!result.ok) {
+    return {
+      content: "failed",
+      summary: result.error ? truncateOneLine(result.error) : undefined,
+    };
+  }
+
+  const output = result.output.trim();
+  switch (result.name) {
+    case "read": {
+      const path = readInputString(input, "path") ?? "file";
+      const lineCount = output.length === 0 ? 0 : output.split("\n").length;
+      return {
+        content: "file read complete",
+        target: path,
+        countLabel: `${lineCount} lines, ${result.output.length} chars`,
+      };
+    }
+    case "glob": {
+      const pattern = readInputString(input, "pattern") ?? "pattern";
+      const matches = output.length === 0 ? 0 : output.split("\n").length;
+      return { content: "glob complete", target: pattern, countLabel: `${matches} matches` };
+    }
+    case "grep": {
+      const pattern = readInputString(input, "pattern") ?? "pattern";
+      const include = readInputString(input, "include");
+      const matches = output.length === 0 ? 0 : output.split("\n").length;
+      return {
+        content: "search complete",
+        target: include ? `${pattern} in ${include}` : pattern,
+        countLabel: `${matches} matches`,
+      };
+    }
+    case "bash": {
+      const command = readInputString(input, "command") ?? "command";
+      return {
+        content: "command complete",
+        target: command,
+        summary: formatOutputSummary(result.output),
+      };
+    }
+    case "webfetch": {
+      const url = readInputString(input, "url") ?? "url";
+      return { content: "fetched URL", target: url, summary: formatOutputSummary(result.output) };
+    }
+    case "websearch": {
+      const query = readInputString(input, "query") ?? "query";
+      return {
+        content: "web search complete",
+        target: query,
+        summary: formatOutputSummary(result.output),
+      };
+    }
+    case "lsp_symbols":
+    case "lsp_definition":
+    case "lsp_references":
+    case "lsp_hover":
+    case "lsp_call_hierarchy": {
+      const filePath = readInputString(input, "filePath") ?? "file";
+      return {
+        content: "LSP query complete",
+        target: filePath,
+        summary: formatOutputSummary(result.output),
+      };
+    }
+    case "apply_patch":
+      return {
+        content: "workspace updated",
+        target: "patch",
+        summary: formatOutputSummary(result.output),
+      };
+    case "edit":
+    case "write": {
+      const filePath = readInputString(input, "filePath") ?? "file";
+      return {
+        content: "workspace updated",
+        target: filePath,
+        summary: formatOutputSummary(result.output),
+      };
+    }
+    default:
+      return { content: "tool complete", summary: formatOutputSummary(result.output) };
+  }
+}
+
+function formatToolCallSummary(call: ToolCall): string {
+  switch (call.name) {
+    case "bash":
+      return `bash ${readInputString(call.input, "command") ?? "command"}`;
+    case "read":
+      return `read ${readInputString(call.input, "path") ?? "file"}`;
+    case "grep":
+      return `grep ${readInputString(call.input, "pattern") ?? "pattern"}`;
+    case "glob":
+      return `glob ${readInputString(call.input, "pattern") ?? "pattern"}`;
+    default:
+      return call.name;
+  }
 }
 
 function formatToolResultMessage(result: ToolResult, input: unknown): string {
