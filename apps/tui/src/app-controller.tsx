@@ -52,6 +52,12 @@ import {
 import { useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { AppView } from "./app-view.js";
+import {
+  appendDraftSessionEvent,
+  draftEventsToSessionEvents,
+  persistDraftSession,
+  type DraftSessionEvent,
+} from "./draft-session.js";
 
 export type DisplayMessage = {
   id: string;
@@ -87,8 +93,6 @@ export type TodoItem = {
   status: string;
   priority: string;
 };
-
-type DraftSessionEvent = Omit<SessionEvent, "sessionId">;
 
 type AppendSessionEventInput = {
   type: SessionEventType;
@@ -172,6 +176,11 @@ const slashCommands: SlashCommandInfo[] = [
     name: "lsp_hover",
     usage: "/lsp_hover <file> <line> <character>",
     description: "Show hover/type info",
+  },
+  {
+    name: "lsp_call_hierarchy",
+    usage: "/lsp_call_hierarchy <file> <line> <character> [incoming|outgoing|both]",
+    description: "Show symbol call hierarchy",
   },
   { name: "bash", usage: "/bash <command>", description: "Run a shell command with permission" },
   { name: "apply_patch", usage: "/apply_patch <patch-file>", description: "Apply a patch file" },
@@ -763,11 +772,15 @@ export function AppController() {
       case "lsp_definition":
       case "lsp_references":
       case "lsp_hover":
+      case "lsp_call_hierarchy":
         return await executeToolAction(
           createToolCall(action.type, {
             filePath: action.filePath,
             line: action.line,
             character: action.character,
+            ...(action.type === "lsp_call_hierarchy" && action.direction !== undefined
+              ? { direction: action.direction }
+              : {}),
           }),
           agent,
         );
@@ -1094,10 +1107,14 @@ export function AppController() {
       case "lsp_definition":
       case "lsp_references":
       case "lsp_hover":
+      case "lsp_call_hierarchy":
         return createToolCall(action.type, {
           filePath: action.filePath,
           line: action.line,
           character: action.character,
+          ...(action.type === "lsp_call_hierarchy" && action.direction !== undefined
+            ? { direction: action.direction }
+            : {}),
         });
       case "verify":
         return createToolCall("bash", { command: action.command ?? "" });
@@ -2113,15 +2130,13 @@ export function AppController() {
     }
 
     const event = {
-      id: crypto.randomUUID(),
-      sequence: draftEventsRef.current.length + 1,
       type: input.type,
       payload: input.payload,
-      createdAt: new Date().toISOString(),
-    } satisfies DraftSessionEvent;
-    draftEventsRef.current = [...draftEventsRef.current, event];
+    } satisfies AppendSessionEventInput;
+    const result = appendDraftSessionEvent({ draftEvents: draftEventsRef.current, event });
+    draftEventsRef.current = result.draftEvents;
 
-    return { ...event, sessionId: "draft" };
+    return result.event;
   }
 
   function getCurrentSessionEvents(): SessionEvent[] {
@@ -2129,7 +2144,7 @@ export function AppController() {
       return store.listEvents(session.id);
     }
 
-    return draftEventsRef.current.map((event) => ({ ...event, sessionId: "draft" }));
+    return draftEventsToSessionEvents(draftEventsRef.current);
   }
 
   function persistDraftSessionIfNeeded(userMessage: string, assistantMessage: string): void {
@@ -2137,16 +2152,20 @@ export function AppController() {
       return;
     }
 
-    const title = createSessionTitle({ userMessage, assistantMessage });
-    const createdSession = store.createSession({ title });
+    const result = persistDraftSession({
+      session,
+      store,
+      draftEvents: draftEventsRef.current,
+      userMessage,
+      assistantMessage,
+      createTitle: createSessionTitle,
+    });
 
-    for (const event of draftEventsRef.current) {
-      store.appendEvent({ sessionId: createdSession.id, type: event.type, payload: event.payload });
-    }
+    if (!result.persisted) return;
 
     draftEventsRef.current = [];
-    setSession(createdSession);
-    addMessage(`Saved session: ${createdSession.id} (${title})`);
+    setSession(result.session);
+    addMessage(`Saved session: ${result.session.id} (${result.title})`);
   }
 
   function requirePersistedSession(message: string): boolean {
@@ -2273,13 +2292,15 @@ function parseToolCommand(command: string, rawArgs: string): ToolCall | undefine
       return createToolCall(command, { filePath: rawArgs.trim() });
     case "lsp_definition":
     case "lsp_references":
-    case "lsp_hover": {
-      const [filePath = "", line = "", character = ""] = rawArgs.split(/\s+/);
+    case "lsp_hover":
+    case "lsp_call_hierarchy": {
+      const [filePath = "", line = "", character = "", direction] = rawArgs.split(/\s+/);
 
       return createToolCall(command, {
         filePath,
         line: Number(line),
         character: Number(character),
+        ...(command === "lsp_call_hierarchy" && direction !== undefined ? { direction } : {}),
       });
     }
     case "task":
@@ -2555,7 +2576,8 @@ function isToolName(value: string): value is ToolName {
     value === "lsp_symbols" ||
     value === "lsp_definition" ||
     value === "lsp_references" ||
-    value === "lsp_hover"
+    value === "lsp_hover" ||
+    value === "lsp_call_hierarchy"
   );
 }
 
@@ -2617,7 +2639,8 @@ function formatToolResultMessage(result: ToolResult, input: unknown): string {
     case "lsp_symbols":
     case "lsp_definition":
     case "lsp_references":
-    case "lsp_hover": {
+    case "lsp_hover":
+    case "lsp_call_hierarchy": {
       const filePath = readInputString(input, "filePath") ?? "file";
       return `${result.name}: ${filePath}\n${truncate(output)}`;
     }
