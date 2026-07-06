@@ -31,6 +31,28 @@ export function evaluateConsensus(votes: VoteResponse[]): ConsensusResult {
   };
 }
 
+export function evaluateUnanimousConsensus(votes: VoteResponse[]): ConsensusResult {
+  if (votes.length < 2) {
+    throw new Error("Unanimous consensus requires at least 2 votes.");
+  }
+
+  const engineIds = new Set(votes.map((vote) => vote.engineId));
+
+  if (engineIds.size !== votes.length) {
+    throw new Error("Consensus votes must come from unique engine IDs.");
+  }
+
+  const approveCount = votes.filter((vote) => vote.decision === "APPROVE").length;
+  const rejectCount = votes.length - approveCount;
+
+  return {
+    outcome: getUnanimousOutcome(approveCount, votes.length),
+    approveCount,
+    rejectCount,
+    votes,
+  };
+}
+
 function getOutcome(approveCount: number): ConsensusOutcome {
   switch (approveCount) {
     case 3:
@@ -44,4 +66,10 @@ function getOutcome(approveCount: number): ConsensusOutcome {
     default:
       throw new Error(`Invalid approve count: ${approveCount}`);
   }
+}
+
+function getUnanimousOutcome(approveCount: number, total: number): ConsensusOutcome {
+  if (approveCount === total) return "PASS";
+  if (approveCount === 0) return "REJECT";
+  return "DEADLOCK";
 }

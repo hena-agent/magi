@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateConsensus } from "./consensus.js";
+import { evaluateConsensus, evaluateUnanimousConsensus } from "./consensus.js";
 import type { VoteResponse } from "./vote.js";
 
 describe("evaluateConsensus", () => {
@@ -26,6 +26,23 @@ describe("evaluateConsensus", () => {
         vote(3, "APPROVE"),
       ]),
     ).toThrow(/unique/);
+  });
+});
+
+describe("evaluateUnanimousConsensus", () => {
+  it.each([
+    [["APPROVE", "APPROVE"], "PASS"],
+    [["APPROVE", "REJECT"], "DEADLOCK"],
+    [["REJECT", "REJECT"], "REJECT"],
+    [["APPROVE", "APPROVE", "APPROVE", "APPROVE"], "PASS"],
+  ] as const)("maps %s to %s", (decisions, outcome) => {
+    expect(
+      evaluateUnanimousConsensus(decisions.map((decision, index) => vote(index, decision))).outcome,
+    ).toBe(outcome);
+  });
+
+  it("requires at least two votes", () => {
+    expect(() => evaluateUnanimousConsensus([vote(1, "APPROVE")])).toThrow(/at least 2/);
   });
 });
 
