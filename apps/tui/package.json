@@ -7,10 +7,10 @@
     "magi": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json",
     "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
-    "start": "node dist/index.js",
-    "start:tsx": "tsx src/index.tsx",
+    "start": "pnpm --filter @magi/core build && node dist/index.js",
+    "start:tsx": "pnpm --filter @magi/core build && tsx src/index.tsx",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
