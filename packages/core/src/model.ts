@@ -1,9 +1,11 @@
-import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, streamText } from "ai";
-import { OAUTH_DUMMY_KEY } from "./auth.js";
+import { generateText, streamText, type LanguageModel } from "ai";
 import { listEffectiveModelProviders, type ModelProviderSettings } from "./model-catalog.js";
+import {
+  getProviderBaseUrl,
+  resolveLanguageModel,
+  resolveModelRuntimeCredentials,
+} from "./model-runtime.js";
 import { formatToolCalls, formatToolDefinitions } from "./model-tools.js";
-import { createOpenAICodexOAuthFetch, isOpenAICodexOAuthModel } from "./openai-codex-oauth.js";
 import type { ToolName } from "./tools.js";
 
 type ModelAdapterConfig = {
@@ -15,7 +17,7 @@ type ModelAdapterConfig = {
 
 type AdapterRuntime = {
   providerConfig: ModelProviderSettings;
-  model: ReturnType<ReturnType<typeof createOpenAI>>;
+  getModel: () => Promise<LanguageModel>;
   baseURL?: string;
   isOAuth: boolean;
 };
@@ -65,49 +67,31 @@ export type ModelToolCall = {
 const defaultSystemPrompt =
   "You are MAGI, a local coding assistant. Respond concisely. Do not claim tool results unless they are provided in the prompt.";
 
-const defaultDeepSeekBaseUrl = "https://api.deepseek.com";
-
 export function createPrimaryModelAdapter(config: ModelAdapterConfig): PrimaryModelAdapter {
   const providerConfig = selectProviderConfig(config);
+  const credentials = resolveModelRuntimeCredentials(providerConfig);
 
-  if (!isOpenAICompatibleProvider(providerConfig.provider)) {
-    throw new Error(`Unsupported model provider for Phase 1: ${providerConfig.provider}`);
+  if (!credentials.isOAuth && credentials.apiKeyEnv && !credentials.apiKey) {
+    throw new Error(`Missing ${credentials.apiKeyEnv} for model provider ${providerConfig.id}.`);
   }
 
-  const isOAuth = providerConfig.provider === "openai" && providerConfig.auth?.type === "oauth";
-  const apiKey = isOAuth
-    ? OAUTH_DUMMY_KEY
-    : providerConfig.apiKeyEnv
-      ? process.env[providerConfig.apiKeyEnv]
-      : undefined;
-
-  if (!isOAuth && providerConfig.apiKeyEnv && !apiKey) {
-    throw new Error(`Missing ${providerConfig.apiKeyEnv} for model provider ${providerConfig.id}.`);
-  }
-
-  if (isOAuth && !config.workspaceRoot) {
+  if (credentials.isOAuth && !config.workspaceRoot) {
     throw new Error("OpenAI OAuth model providers require workspaceRoot in the adapter config.");
   }
 
   const baseURL = getProviderBaseUrl(providerConfig);
-  const provider = createOpenAI({
-    ...(apiKey === undefined ? {} : { apiKey }),
-    ...(baseURL === undefined ? {} : { baseURL }),
-    ...(isOAuth && config.workspaceRoot
-      ? {
-          fetch: createOpenAICodexOAuthFetch({
-            workspaceRoot: config.workspaceRoot,
-            sessionId: config.sessionId,
-          }),
-        }
-      : {}),
-    ...(shouldUseChatCompletions(providerConfig.provider) ? { name: providerConfig.provider } : {}),
-  });
   const runtime: AdapterRuntime = {
     providerConfig,
-    model: selectLanguageModel(provider, providerConfig),
+    getModel: memoizeAsync(() =>
+      resolveLanguageModel({
+        providerConfig,
+        apiKey: credentials.apiKey,
+        workspaceRoot: config.workspaceRoot,
+        sessionId: config.sessionId,
+      }),
+    ),
     ...(baseURL === undefined ? {} : { baseURL }),
-    isOAuth,
+    isOAuth: credentials.isOAuth,
   };
 
   return {
@@ -137,7 +121,7 @@ async function generateAdapterText(
   try {
     if (runtime.isOAuth) {
       const result = streamText({
-        model: runtime.model,
+        model: await runtime.getModel(),
         providerOptions: {
           openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
         },
@@ -148,7 +132,7 @@ async function generateAdapterText(
     }
 
     const result = await generateText({
-      model: runtime.model,
+      model: await runtime.getModel(),
       system: input.system ?? defaultSystemPrompt,
       prompt: input.prompt,
     });
@@ -179,7 +163,7 @@ async function generateOAuthStep(
   input: Parameters<NonNullable<PrimaryModelAdapter["generateStep"]>>[0],
 ): Promise<ModelStepResponse> {
   const result = streamText({
-    model: runtime.model,
+    model: await runtime.getModel(),
     providerOptions: {
       openai: { store: false, instructions: input.system ?? defaultSystemPrompt },
     },
@@ -202,7 +186,7 @@ async function generateChatStep(
   input: Parameters<NonNullable<PrimaryModelAdapter["generateStep"]>>[0],
 ): Promise<ModelStepResponse> {
   const result = await generateText({
-    model: runtime.model,
+    model: await runtime.getModel(),
     system: input.system ?? defaultSystemPrompt,
     prompt: formatModelMessages(input.messages),
     tools: formatToolDefinitions(input.tools),
@@ -246,21 +230,6 @@ function selectProviderConfig(config: ModelAdapterConfig): ModelProviderSettings
   return providerConfig;
 }
 
-function selectLanguageModel(
-  provider: ReturnType<typeof createOpenAI>,
-  providerConfig: ModelProviderSettings,
-) {
-  if (providerConfig.provider === "openai" && isOpenAICodexOAuthModel(providerConfig.model)) {
-    return provider.responses(providerConfig.model);
-  }
-
-  if (shouldUseChatCompletions(providerConfig.provider)) {
-    return provider.chat(providerConfig.model);
-  }
-
-  return provider(providerConfig.model);
-}
-
 function formatModelMessages(messages: ModelMessage[]): string {
   return messages
     .map(
@@ -270,22 +239,11 @@ function formatModelMessages(messages: ModelMessage[]): string {
     .join("\n\n");
 }
 
-function isOpenAICompatibleProvider(provider: ModelProviderSettings["provider"]): boolean {
-  return provider === "openai" || provider === "deepseek" || provider === "custom";
-}
+function memoizeAsync<T>(factory: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | undefined;
 
-function shouldUseChatCompletions(provider: ModelProviderSettings["provider"]): boolean {
-  return provider === "deepseek" || provider === "custom";
-}
-
-function getProviderBaseUrl(providerConfig: ModelProviderSettings): string | undefined {
-  if (providerConfig.baseUrl !== undefined) {
-    return providerConfig.baseUrl;
-  }
-
-  if (providerConfig.provider === "deepseek") {
-    return defaultDeepSeekBaseUrl;
-  }
-
-  return undefined;
+  return () => {
+    cached ??= factory();
+    return cached;
+  };
 }

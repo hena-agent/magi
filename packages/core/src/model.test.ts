@@ -6,6 +6,8 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete process.env.MAGI_AUTH_CONTENT;
+  delete process.env.MAGI_TEST_ANTHROPIC_KEY;
+  delete process.env.MAGI_TEST_GOOGLE_KEY;
   vi.restoreAllMocks();
 });
 
@@ -15,12 +17,42 @@ it("falls back to built-in OpenAI OAuth providers", () => {
   expect(adapter.provider).toMatchObject({ id: "openai", model: "gpt-5.5" });
 });
 
-it("rejects unsupported Phase 1 providers", () => {
+it("creates an Anthropic adapter", () => {
+  process.env.MAGI_TEST_ANTHROPIC_KEY = "test-key";
+
   expect(() =>
     createPrimaryModelAdapter({
-      modelProviders: [{ id: "primary", provider: "anthropic", model: "claude" }],
+      modelProviders: [
+        {
+          id: "anthropic",
+          provider: "anthropic",
+          model: "claude-sonnet",
+          apiKeyEnv: "MAGI_TEST_ANTHROPIC_KEY",
+        },
+      ],
     }),
-  ).toThrow(/Unsupported model provider/);
+  ).not.toThrow();
+
+  delete process.env.MAGI_TEST_ANTHROPIC_KEY;
+});
+
+it("creates a Google adapter", () => {
+  process.env.MAGI_TEST_GOOGLE_KEY = "test-key";
+
+  expect(() =>
+    createPrimaryModelAdapter({
+      modelProviders: [
+        {
+          id: "google",
+          provider: "google",
+          model: "gemini-pro",
+          apiKeyEnv: "MAGI_TEST_GOOGLE_KEY",
+        },
+      ],
+    }),
+  ).not.toThrow();
+
+  delete process.env.MAGI_TEST_GOOGLE_KEY;
 });
 
 it("requires configured API key environment variables", () => {
