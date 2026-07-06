@@ -38,6 +38,7 @@ export { runAgentTurn } from "./agent/turn.js";
 export { getAgentRunContinuation, runEventDrivenAgent } from "./agent/runner.js";
 export * from "./magi/index.js";
 export { createPrimaryModelAdapter } from "./model.js";
+export { getModelsDevCachePath, loadModelsDevCatalog } from "./models-dev.js";
 export { builtinModelProviders, listEffectiveModelProviders } from "./model-catalog.js";
 export {
   getDefaultModelSelection,
@@ -77,6 +78,7 @@ export type {
   PrimaryModelAdapter,
   SelectedModelProvider,
 } from "./model.js";
+export type { ModelsDevCatalog, ModelsDevModel, ModelsDevProvider } from "./models-dev.js";
 export type { ModelProviderSummary, ModelSelection } from "./model-selection.js";
 export type { AgentAction, ExecutableAgentAction } from "./agent/actions.js";
 export type { AgentTurnEvent, AgentTurnResult, AgentTurnStep } from "./agent/turn.js";
