@@ -1,5 +1,6 @@
 import type { ToolName } from "../tools.js";
 import { readPositiveInteger } from "./actions-input.js";
+import { readWebsearchAction, type WebsearchAgentAction } from "./actions-websearch.js";
 
 export type AgentAction =
   | { type: "answer"; content: string }
@@ -10,6 +11,7 @@ export type AgentAction =
   | { type: "write"; filePath: string; content: string }
   | { type: "apply_patch"; patchText: string }
   | { type: "webfetch"; url: string; format?: "text" | "markdown" | "html"; timeout?: number }
+  | WebsearchAgentAction
   | { type: "todowrite"; todos: unknown[] }
   | { type: "question"; questions: unknown[] }
   | { type: "skill"; name: string }
@@ -66,6 +68,8 @@ function readActionByType(action: Record<string, unknown>, type: string): AgentA
       return { type, patchText: readString(action, "patchText") };
     case "webfetch":
       return readWebfetchAction(action);
+    case "websearch":
+      return readWebsearchAction(action);
     case "todowrite":
       return { type, todos: readArray(action, "todos") };
     case "question":
@@ -187,6 +191,7 @@ export function agentActionToToolName(action: ExecutableAgentAction): ToolName |
     action.type === "write" ||
     action.type === "apply_patch" ||
     action.type === "webfetch" ||
+    action.type === "websearch" ||
     action.type === "todowrite" ||
     action.type === "question" ||
     action.type === "skill" ||

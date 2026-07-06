@@ -26,6 +26,8 @@ export function getActionKey(action: ExecutableAgentAction): string {
       return `apply_patch:${action.patchText}`;
     case "webfetch":
       return `webfetch:${action.url}:${action.format ?? "markdown"}`;
+    case "websearch":
+      return `websearch:${action.providerId ?? "auto"}:${action.query}`;
     case "todowrite":
       return `todowrite:${JSON.stringify(action.todos)}`;
     case "question":

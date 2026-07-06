@@ -203,6 +203,24 @@ export const networkNativeToolDefinitions = [
       additionalProperties: false,
     },
   },
+  {
+    name: "websearch" as const,
+    description:
+      "Search the web using Exa, Parallel, or Brave. Use for current information that is not available in the workspace.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        providerId: { type: "string", enum: ["exa", "parallel", "brave"] },
+        limit: { type: "number" },
+        type: { type: "string", enum: ["auto", "fast", "deep"] },
+        livecrawl: { type: "string", enum: ["fallback", "preferred"] },
+        contextMaxCharacters: { type: "number" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const editNativeToolDefinitions = [

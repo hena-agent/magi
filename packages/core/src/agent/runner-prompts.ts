@@ -168,7 +168,10 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
       : []),
     ...(agent.permission.network === "deny"
       ? []
-      : [{ type: "webfetch", url: "https://example.com", format: "markdown" }]),
+      : [
+          { type: "webfetch", url: "https://example.com", format: "markdown" },
+          { type: "websearch", query: "current information to research", providerId: "exa" },
+        ]),
     ...(agent.permission.shell === "deny"
       ? []
       : [{ type: "verify", command: "optional focused command" }]),

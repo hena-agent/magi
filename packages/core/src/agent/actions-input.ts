@@ -7,3 +7,12 @@ export function readPositiveInteger(value: Record<string, unknown>, field: strin
 
   return fieldValue;
 }
+
+export function readOptionalPositiveInteger(
+  value: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  if (value[field] === undefined) return undefined;
+
+  return readPositiveInteger(value, field);
+}

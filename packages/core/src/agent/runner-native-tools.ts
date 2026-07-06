@@ -2,6 +2,7 @@ import type { ModelToolCall } from "../model.js";
 import type { ToolName } from "../tools.js";
 import type { ExecutableAgentAction } from "./actions.js";
 import type { AgentInfo } from "./registry.js";
+import { readWebsearchNativeAction } from "./runner-native-websearch.js";
 import {
   editNativeToolDefinitions,
   networkNativeToolDefinitions,
@@ -63,6 +64,8 @@ function readKnownToolCall(name: ToolName, input: Record<string, unknown>): Exec
       return { type: "apply_patch", patchText: readString(input, "patchText") };
     case "webfetch":
       return readWebfetchAction(input);
+    case "websearch":
+      return readWebsearchNativeAction(input);
     case "todowrite":
       return { type: "todowrite", todos: readArray(input, "todos") };
     case "question":
@@ -111,6 +114,7 @@ function isToolName(value: string): value is ToolName {
     value === "apply_patch" ||
     value === "bash" ||
     value === "webfetch" ||
+    value === "websearch" ||
     value === "todowrite" ||
     value === "question" ||
     value === "skill" ||
