@@ -1078,13 +1078,6 @@ export function AppController() {
       return;
     }
 
-    if (isKnownAgentCommand(command)) {
-      addMessage(
-        `${activeAgent.id} agent does not support /${command}. Available agent commands: ${formatAllowedAgentCommands(activeAgent.id)}`,
-      );
-      return;
-    }
-
     addMessage(`Unknown command: /${command}. Type /help for available commands.`);
   }
 
@@ -1099,67 +1092,10 @@ export function AppController() {
       case "build":
         await switchAgentAndMaybeRun("build", input);
         return;
-      case "validate":
-        await runAgentValidation(input);
-        return;
-      case "verify":
-        if (
-          !requirePersistedSession(
-            "Run a normal prompt first, or /resume an existing session, before running /verify.",
-          )
-        ) {
-          return;
-        }
-        await runVerification(input, activeAgent, { command: "/verify", phase: "verifying" });
-        return;
-      case "test": {
-        if (
-          !requirePersistedSession(
-            "Run a normal prompt first, or /resume an existing session, before running /test.",
-          )
-        ) {
-          return;
-        }
-        const testCommand = getFocusedTestCommand(input);
-        if (!testCommand) {
-          addMessage("Usage: /test [core|tui|config|harness|all]");
-          return;
-        }
-        await runVerification(testCommand, activeAgent, { command: "/test", phase: "testing" });
-        return;
-      }
-      case "harness":
-        addMessage(
-          input.length > 0
-            ? `Harness suite not configured yet: ${input}`
-            : "Harness suites are not configured yet.",
-        );
-        return;
       case "done":
         await showAgentDoneCheckpoint();
         return;
     }
-  }
-
-  async function runAgentValidation(focus: string): Promise<void> {
-    const prompt = [
-      activeAgent.id === "plan"
-        ? "Validate the current plan for completeness, missing requirements, risky assumptions, and readiness to hand off to build. Do not edit files."
-        : "Validate the current implementation against the user's request, current plan, changed files, and known risks. Do not make new edits unless the validation identifies a concrete required fix.",
-      focus.length > 0 ? `Focus: ${focus}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    if (isBusy) {
-      queuePromptForAgent(prompt, activeAgent, activeProviderId, "/validate");
-      return;
-    }
-
-    await submitAgentPrompt(prompt, activeAgent, activeProviderId, {
-      command: "/validate",
-      phase: "validating",
-    });
   }
 
   async function showAgentDoneCheckpoint(): Promise<void> {
@@ -1168,7 +1104,7 @@ export function AppController() {
         [
           "Plan checkpoint:",
           `- plan file: ${getPlanFilePath()}`,
-          "- suggested next: run /validate, then switch to /build when ready.",
+          "- suggested next: ask the plan agent to validate the plan, then switch to /build when ready.",
         ].join("\n"),
       );
       return;
@@ -1180,61 +1116,6 @@ export function AppController() {
     }
 
     await runSummary();
-  }
-
-  function getFocusedTestCommand(target: string): string | undefined {
-    switch ((target || "all").toLowerCase()) {
-      case "all":
-        return "pnpm test";
-      case "core":
-        return "pnpm --filter @magi/core test";
-      case "tui":
-        return "pnpm --filter @magi/tui test";
-      case "config":
-        return "pnpm --filter @magi/config test";
-      case "harness":
-        return "pnpm --filter @magi/harness test";
-      default:
-        return undefined;
-    }
-  }
-
-  function isKnownAgentCommand(command: string): boolean {
-    return ["plan", "build", "validate", "verify", "test", "harness", "done"].includes(command);
-  }
-
-  function formatAllowedAgentCommands(agentId: string): string {
-    const commands = listAgentCommands(agentId).map((candidate) => candidate.slash);
-    return commands.length > 0 ? commands.join(" ") : "none";
-  }
-
-  function queuePromptForAgent(
-    content: string,
-    agent: AgentInfo,
-    providerId: string | undefined,
-    label: string,
-  ): void {
-    const queuedAt = new Date().toISOString();
-    const queuedPrompt = {
-      content,
-      providerId: providerId ?? "",
-      agent,
-      queuedAt,
-      runState: { command: label, phase: label === "/validate" ? "validating" : "running" },
-    };
-    queuedPromptsRef.current = [...queuedPromptsRef.current, queuedPrompt];
-    appendSessionEvent({
-      type: "queued_user_input",
-      payload: {
-        content,
-        agentId: agent.id,
-        providerId,
-        mode: "queued",
-        command: label,
-        queuedAt,
-      },
-    });
-    addMessage(`Queued ${label} #${queuedPromptsRef.current.length}: ${truncateOneLine(content)}`);
   }
 
   async function submitAgentPrompt(
@@ -2066,11 +1947,7 @@ export function AppController() {
     }
   }
 
-  async function runVerification(
-    command: string,
-    agent: AgentInfo = activeAgent,
-    runState?: Pick<ActiveRunState, "command" | "phase">,
-  ): Promise<string> {
+  async function runVerification(command: string, agent: AgentInfo = activeAgent): Promise<string> {
     if (mergeAgentPermission(agent, config.permissions).shell === "deny") {
       const message = `${agent.id} agent cannot run verification because shell permission is denied.`;
       addMessage(message);
@@ -2078,11 +1955,7 @@ export function AppController() {
     }
 
     beginBusy();
-    if (runState) {
-      startActiveRun(agent, runState.command, runState.phase);
-    } else {
-      updateActiveRunState({ phase: "verifying", detail: command || "configured commands" });
-    }
+    updateActiveRunState({ phase: "subprocess verify", detail: command || "configured commands" });
 
     try {
       setActiveStatus(`Running ${command || "configured verification"}`);
@@ -2110,9 +1983,6 @@ export function AppController() {
         )
         .join("\n\n");
     } finally {
-      if (runState) {
-        clearActiveRun();
-      }
       setActiveStatus("Ready");
       endBusy();
     }
@@ -2147,7 +2017,7 @@ export function AppController() {
       });
 
       if (context.verificationFailures.length === 0) {
-        addMessage("No verification failures found. Run /verify first.");
+        addMessage("No verification failures found. Ask the active agent to verify first.");
         return;
       }
 

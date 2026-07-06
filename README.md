@@ -188,16 +188,12 @@ Inside the TUI:
 /model status
 /agent
 /plan
-/validate
 /build
-/test core
-/harness
 /done
 /queue
 /clear_queue
 /steer Use focused tests first
 /interrupt
-/verify
 /revise
 /summary
 /sessions
@@ -219,14 +215,11 @@ Notes:
 - `/model` opens a selector when run without arguments; `/model status`, `/model reset`, and `/model <provider-id>` remain available.
 - `/agent` opens a selector when run without arguments; `/agent <agent-id>` switches directly.
 - `/help` includes the active agent's command surface first, followed by global commands.
-- `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, and `/done` are active-agent commands, not global workflow stages. Unsupported commands explain what the current agent allows.
-- The plan agent exposes `/plan`, `/validate`, and `/done`. It can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
-- The build agent exposes `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, and `/done`.
+- `/plan`, `/build`, and `/done` are user-facing active-agent commands, not global workflow stages.
+- The plan agent exposes `/plan` and `/done`. It can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
+- The build agent exposes `/plan`, `/build`, and `/done`.
 - `/queue`, `/clear_queue`, `/steer`, and `/interrupt` control active or queued agent runs.
-- `/validate` asks the active agent to sanity-check the current plan or implementation.
-- `/verify` runs configured verification commands, or one explicit command when provided.
-- `/test [core|tui|config|harness|all]` runs a known focused test target.
-- `/harness` is reserved for future product/scenario harness suites and currently reports that no suite is configured.
+- Validation, verification, focused tests, and future harness suites are agent-invoked subprocesses/tools. Ask the active agent in plain language to validate, verify, or run tests.
 - `/done` is a checkpoint: plan mode reports the plan file and next step, build mode summarizes the session.
 - `/revise` asks the active agent to revise from recent verification failures.
 - `/summary` reports changed files, verification results, and residual risk.

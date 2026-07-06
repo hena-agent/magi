@@ -3,25 +3,13 @@ import { getAgentCommand, listAgentCommandIds, listAgentCommands } from "./comma
 
 describe("agent commands", () => {
   it("exposes the plan agent command surface", () => {
-    expect(listAgentCommandIds("plan")).toEqual(["plan", "validate", "done"]);
-    expect(listAgentCommands("plan").map((command) => command.slash)).toEqual([
-      "/plan",
-      "/validate",
-      "/done",
-    ]);
+    expect(listAgentCommandIds("plan")).toEqual(["plan", "done"]);
+    expect(listAgentCommands("plan").map((command) => command.slash)).toEqual(["/plan", "/done"]);
   });
 
   it("exposes the build agent command surface", () => {
-    expect(listAgentCommandIds("build")).toEqual([
-      "plan",
-      "build",
-      "validate",
-      "verify",
-      "test",
-      "harness",
-      "done",
-    ]);
-    expect(getAgentCommand("build", "verify")?.kind).toBe("verification");
+    expect(listAgentCommandIds("build")).toEqual(["plan", "build", "done"]);
+    expect(getAgentCommand("build", "done")?.kind).toBe("checkpoint");
   });
 
   it("returns no commands for agents without a command surface", () => {

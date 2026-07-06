@@ -98,18 +98,17 @@ The session context intentionally excludes the just-appended user event when con
 
 Slash commands do not form a separate workflow engine. The TUI routes them before a normal model turn starts.
 
-Global commands handle shell state such as sessions, model selection, auth, queues, summaries, and MAGI previews. Active-agent commands are provided by the selected agent:
+Global commands handle shell state such as sessions, model selection, auth, queues, summaries, and MAGI previews. User-facing active-agent commands are provided by the selected agent:
 
-- `plan`: `/plan`, `/validate`, `/done`.
-- `build`: `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, `/done`.
+- `plan`: `/plan`, `/done`.
+- `build`: `/plan`, `/build`, `/done`.
 
-Agent commands either start an agent turn or run a deterministic local action:
+User-facing agent commands either switch agent context or report a checkpoint:
 
 - `/plan` and `/build` switch agent context and optionally submit a prompt.
-- `/validate` submits a model-driven validation prompt to the active agent.
-- `/verify` and `/test` run configured or focused verification commands.
-- `/harness` is reserved for future scenario harness suites.
 - `/done` reports a checkpoint or session summary; it is not a mandatory transition.
+
+Validation, verification, focused tests, and future harness suites are agent-invoked subprocesses/tools. The user asks for them in plain language; the active agent decides when to call them and receives their result as an observation.
 
 ## Per-Step Runner Flow
 
