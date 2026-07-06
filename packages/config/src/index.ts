@@ -5,6 +5,7 @@ import type {
   AgentConfig,
   LoadConfigOptions,
   MagiConfig,
+  MagiModeConfig,
   PermissionConfig,
   SessionConfig,
 } from "./types.js";
@@ -14,6 +15,8 @@ export type {
   AgentConfig,
   LoadConfigOptions,
   MagiConfig,
+  MagiModeConfig,
+  MagiSelectionConfig,
   ModelProviderAuthConfig,
   ModelProviderConfig,
   PermissionConfig,
@@ -38,6 +41,14 @@ const defaultSession: SessionConfig = {
   startup: "new",
 };
 
+const defaultMagi: MagiModeConfig = {
+  selection: {
+    minEngines: 2,
+    maxEngines: 3,
+    preferFamilyDiversity: true,
+  },
+};
+
 export function getDefaultConfig(): MagiConfig {
   const workspaceRoot = findWorkspaceRoot(process.env.INIT_CWD ?? process.cwd());
 
@@ -48,6 +59,7 @@ export function getDefaultConfig(): MagiConfig {
     verificationCommands: ["pnpm typecheck", "pnpm test", "pnpm lint", "pnpm knip"],
     agent: defaultAgent,
     session: defaultSession,
+    magi: defaultMagi,
   };
 }
 
@@ -80,6 +92,12 @@ export function loadConfig(options: LoadConfigOptions = {}): MagiConfig {
     session: {
       ...baseConfig.session,
       ...rawConfig.session,
+    },
+    magi: {
+      selection: {
+        ...baseConfig.magi.selection,
+        ...rawConfig.magi?.selection,
+      },
     },
   };
 }

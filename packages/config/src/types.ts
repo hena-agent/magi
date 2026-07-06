@@ -28,6 +28,17 @@ export type SessionConfig = {
   startup: "new" | "resume";
 };
 
+export type MagiSelectionConfig = {
+  providerIds?: string[];
+  minEngines: number;
+  maxEngines: number;
+  preferFamilyDiversity: boolean;
+};
+
+export type MagiModeConfig = {
+  selection: MagiSelectionConfig;
+};
+
 export type MagiConfig = {
   workspaceRoot: string;
   modelProviders: ModelProviderConfig[];
@@ -35,6 +46,7 @@ export type MagiConfig = {
   verificationCommands: string[];
   agent: AgentConfig;
   session: SessionConfig;
+  magi: MagiModeConfig;
 };
 
 export type LoadConfigOptions = {
@@ -48,4 +60,7 @@ export type RawMagiConfig = {
   verificationCommands?: string[];
   agent?: Partial<AgentConfig>;
   session?: Partial<SessionConfig>;
+  magi?: {
+    selection?: Partial<MagiSelectionConfig>;
+  };
 };

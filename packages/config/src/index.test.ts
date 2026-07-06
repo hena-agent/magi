@@ -24,6 +24,9 @@ it("returns defaults when no config file exists", () => {
   ]);
   expect(config.agent).toEqual({ maxIterations: 30 });
   expect(config.session).toEqual({ startup: "new" });
+  expect(config.magi).toEqual({
+    selection: { minEngines: 2, maxEngines: 3, preferFamilyDiversity: true },
+  });
 });
 
 it("loads model providers, permissions, and verification commands", () => {
@@ -46,6 +49,14 @@ it("loads model providers, permissions, and verification commands", () => {
       verificationCommands: ["pnpm test"],
       agent: { maxIterations: 42 },
       session: { startup: "resume" },
+      magi: {
+        selection: {
+          providerIds: ["openai", "anthropic"],
+          minEngines: 2,
+          maxEngines: 2,
+          preferFamilyDiversity: false,
+        },
+      },
     }),
   );
 
@@ -68,6 +79,14 @@ it("loads model providers, permissions, and verification commands", () => {
   expect(config.verificationCommands).toEqual(["pnpm test"]);
   expect(config.agent).toEqual({ maxIterations: 42 });
   expect(config.session).toEqual({ startup: "resume" });
+  expect(config.magi).toEqual({
+    selection: {
+      providerIds: ["openai", "anthropic"],
+      minEngines: 2,
+      maxEngines: 2,
+      preferFamilyDiversity: false,
+    },
+  });
 });
 
 it("accepts DeepSeek provider config", () => {
@@ -180,6 +199,16 @@ it("rejects invalid session config values", () => {
   );
 
   expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/session\.startup/);
+});
+
+it("rejects invalid MAGI selection values", () => {
+  const workspaceRoot = createWorkspace();
+  writeFileSync(
+    join(workspaceRoot, "magi.config.json"),
+    JSON.stringify({ magi: { selection: { minEngines: 3, maxEngines: 2 } } }),
+  );
+
+  expect(() => loadConfig({ cwd: workspaceRoot })).toThrow(/minEngines must be <= maxEngines/);
 });
 
 function createWorkspace(): string {

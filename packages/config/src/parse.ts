@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import type {
   AgentConfig,
+  MagiModeConfig,
+  MagiSelectionConfig,
   ModelProviderAuthConfig,
   ModelProviderConfig,
   PermissionConfig,
@@ -26,7 +28,63 @@ export function parseConfigFile(configPath: string): RawMagiConfig {
     ),
     agent: readAgentConfig(parsedConfig.agent, configPath),
     session: readSessionConfig(parsedConfig.session, configPath),
+    magi: readMagiConfig(parsedConfig.magi, configPath),
   };
+}
+
+function readMagiConfig(value: unknown, configPath: string): RawMagiConfig["magi"] | undefined {
+  if (value === undefined) return undefined;
+
+  if (!isObject(value)) {
+    throw new Error(`magi must be an object: ${configPath}`);
+  }
+
+  const selection = readMagiSelectionConfig(value.selection, configPath);
+  return selection === undefined ? undefined : { selection };
+}
+
+function readMagiSelectionConfig(
+  value: unknown,
+  configPath: string,
+): Partial<MagiSelectionConfig> | undefined {
+  if (value === undefined) return undefined;
+
+  if (!isObject(value)) {
+    throw new Error(`magi.selection must be an object: ${configPath}`);
+  }
+
+  const selection: Partial<MagiModeConfig["selection"]> = {};
+  const providerIds = readStringArray(value.providerIds, "magi.selection.providerIds", configPath);
+  const minEngines = readOptionalPositiveInteger(
+    value.minEngines,
+    "magi.selection.minEngines",
+    configPath,
+  );
+  const maxEngines = readOptionalPositiveInteger(
+    value.maxEngines,
+    "magi.selection.maxEngines",
+    configPath,
+  );
+
+  if (providerIds !== undefined) selection.providerIds = providerIds;
+  if (minEngines !== undefined) selection.minEngines = minEngines;
+  if (maxEngines !== undefined) selection.maxEngines = maxEngines;
+  if (value.preferFamilyDiversity !== undefined) {
+    if (typeof value.preferFamilyDiversity !== "boolean") {
+      throw new Error(`magi.selection.preferFamilyDiversity must be a boolean: ${configPath}`);
+    }
+    selection.preferFamilyDiversity = value.preferFamilyDiversity;
+  }
+
+  if (
+    selection.minEngines !== undefined &&
+    selection.maxEngines !== undefined &&
+    selection.minEngines > selection.maxEngines
+  ) {
+    throw new Error(`magi.selection.minEngines must be <= maxEngines: ${configPath}`);
+  }
+
+  return selection;
 }
 
 function readAgentConfig(value: unknown, configPath: string): Partial<AgentConfig> | undefined {
@@ -181,6 +239,20 @@ function readPermission(
 
   if (value !== "allow" && value !== "prompt" && value !== "deny") {
     throw new Error(`permissions.${name} must be allow, prompt, or deny: ${configPath}`);
+  }
+
+  return value;
+}
+
+function readOptionalPositiveInteger(
+  value: unknown,
+  path: string,
+  configPath: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${path} must be a positive integer: ${configPath}`);
   }
 
   return value;
