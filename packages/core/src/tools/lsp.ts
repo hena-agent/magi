@@ -121,6 +121,9 @@ function startTypescriptLanguageServer(workspaceRoot: string): LspClient {
     cwd: workspaceRoot,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  childProcess.stdin.on("error", () => undefined);
+  childProcess.stdout.on("error", () => undefined);
+  childProcess.stderr.on("error", () => undefined);
   const connection = createMessageConnection(
     new StreamMessageReader(childProcess.stdout),
     new StreamMessageWriter(childProcess.stdin),
