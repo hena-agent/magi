@@ -201,6 +201,7 @@ function formatMetadataLines(metadata: DisplayMessage["metadata"]): string[] {
       : `duration ${formatDuration(metadata.durationMs)}`,
     metadata.countLabel,
     metadata.summary,
+    metadata.preview,
   ].filter((value): value is string => typeof value === "string" && value.length > 0);
 }
 

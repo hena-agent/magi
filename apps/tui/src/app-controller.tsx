@@ -75,6 +75,7 @@ export type DisplayMessage = {
     target?: string;
     countLabel?: string;
     summary?: string;
+    preview?: string;
   };
 };
 
@@ -3058,9 +3059,13 @@ function getDisplayMessageLineCount(message: DisplayMessage, expanded = false): 
   const bodyLines = splitDisplayLines(message.content).length;
   const metadataLines = [
     message.metadata?.target,
+    message.metadata?.durationMs === undefined ? undefined : String(message.metadata.durationMs),
     message.metadata?.countLabel,
     message.metadata?.summary,
-  ].filter((value) => typeof value === "string" && value.length > 0).length;
+    message.metadata?.preview,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .reduce((count, value) => count + splitDisplayLines(value).length, 0);
   const detailLines =
     message.expandable && expanded && message.detail ? splitDisplayLines(message.detail).length : 0;
   const collapsedHintLines = message.expandable && !expanded ? 1 : 0;
@@ -3215,6 +3220,7 @@ type ToolDisplaySummary = {
   target?: string;
   countLabel?: string;
   summary?: string;
+  preview?: string;
 };
 
 function formatToolResultDisplayMessage(
@@ -3239,6 +3245,7 @@ function formatToolResultDisplayMessage(
       ...(summary.target ? { target: summary.target } : {}),
       ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
       ...(summary.summary ? { summary: summary.summary } : {}),
+      ...(summary.preview ? { preview: summary.preview } : {}),
     },
   };
 }
@@ -3260,12 +3267,18 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "file read complete",
         target: path,
         countLabel: `${lineCount} lines, ${result.output.length} chars`,
+        preview: formatOutputPreview(result.output),
       };
     }
     case "glob": {
       const pattern = readInputString(input, "pattern") ?? "pattern";
       const matches = output.length === 0 ? 0 : output.split("\n").length;
-      return { content: "glob complete", target: pattern, countLabel: `${matches} matches` };
+      return {
+        content: "glob complete",
+        target: pattern,
+        countLabel: `${matches} matches`,
+        preview: formatOutputPreview(result.output),
+      };
     }
     case "grep": {
       const pattern = readInputString(input, "pattern") ?? "pattern";
@@ -3275,6 +3288,7 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "search complete",
         target: include ? `${pattern} in ${include}` : pattern,
         countLabel: `${matches} matches`,
+        preview: formatOutputPreview(result.output),
       };
     }
     case "bash": {
@@ -3283,11 +3297,17 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "command complete",
         target: command,
         summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
       };
     }
     case "webfetch": {
       const url = readInputString(input, "url") ?? "url";
-      return { content: "fetched URL", target: url, summary: formatOutputSummary(result.output) };
+      return {
+        content: "fetched URL",
+        target: url,
+        summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
+      };
     }
     case "websearch": {
       const query = readInputString(input, "query") ?? "query";
@@ -3295,6 +3315,7 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "web search complete",
         target: query,
         summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
       };
     }
     case "lsp_symbols":
@@ -3307,13 +3328,15 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "LSP query complete",
         target: filePath,
         summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
       };
     }
     case "apply_patch":
       return {
         content: "workspace updated",
-        target: "patch",
+        target: formatPatchTargets(input) ?? "patch",
         summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
       };
     case "edit":
     case "write": {
@@ -3322,6 +3345,7 @@ function formatToolResultSummary(result: ToolResult, input: unknown): ToolDispla
         content: "workspace updated",
         target: filePath,
         summary: formatOutputSummary(result.output),
+        preview: formatOutputPreview(result.output),
       };
     }
     default:
@@ -3548,6 +3572,51 @@ function formatOutputSummary(output: string): string {
   return lines.length === 1
     ? truncateOneLine(trimmed)
     : `${lines.length} lines: ${truncateOneLine(trimmed)}`;
+}
+
+function formatOutputPreview(output: string): string | undefined {
+  const lines = output
+    .trim()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  const previewLines = lines.slice(0, 4);
+  const suffix =
+    lines.length > previewLines.length
+      ? `\n  ... ${lines.length - previewLines.length} more lines`
+      : "";
+  return (
+    [`preview:`, ...previewLines.map((line) => `  ${truncateOneLine(line)}`)].join("\n") + suffix
+  );
+}
+
+function formatPatchTargets(input: unknown): string | undefined {
+  const patch = readInputString(input, "patchText") ?? readInputString(input, "patch");
+  if (!patch) {
+    return undefined;
+  }
+
+  const paths = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const match = /^(?:\+\+\+ b\/|--- a\/|\*\*\* (?:Add|Update|Delete) File: )(.+)$/.exec(line);
+    if (match?.[1] && match[1] !== "/dev/null") {
+      paths.add(match[1].trim());
+    }
+  }
+
+  if (paths.size === 0) {
+    return undefined;
+  }
+
+  const pathList = [...paths];
+  return pathList.length <= 3
+    ? pathList.join(", ")
+    : `${pathList.slice(0, 3).join(", ")} (+${pathList.length - 3} more)`;
 }
 
 function readInputString(input: unknown, field: string): string | undefined {

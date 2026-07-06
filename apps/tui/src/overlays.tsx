@@ -76,6 +76,22 @@ function QuestionOverlay(props: {
   optionIndex: number;
   selectedOptionIndexes: Set<number>;
 }) {
+  const activeQuestion = props.pendingQuestion.questions[0];
+  const selectedLabels = activeQuestion
+    ? [...props.selectedOptionIndexes]
+        .sort((left, right) => left - right)
+        .map((index) => activeQuestion.options[index]?.label)
+        .filter((label): label is string => typeof label === "string")
+    : [];
+  const mode =
+    props.answer.length > 0
+      ? `custom answer: ${props.answer}`
+      : selectedLabels.length > 0
+        ? `selected: ${selectedLabels.join(", ")}`
+        : activeQuestion?.options[props.optionIndex]
+          ? `ready: ${activeQuestion.options[props.optionIndex]?.label}`
+          : "type an answer";
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
       <Text color="yellow" bold>
@@ -100,6 +116,7 @@ function QuestionOverlay(props: {
           ) : null}
         </Box>
       ))}
+      <Text color={props.answer.length > 0 ? "green" : "cyan"}>{mode}</Text>
       <Text>{`answer> ${props.answer}`}</Text>
       <Text dimColor>↑/↓ select space mark enter submit esc cancel</Text>
     </Box>

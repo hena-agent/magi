@@ -103,17 +103,17 @@
 - [ ] Implement reward/penalty updates from sandbox and vote outcomes.
 
 ## Phase 4.5: TUI Usability And Daily-Driver UX
-- [~] Rework the Ink TUI from a raw log view into a usable assistant interface.
+- [x] Rework the Ink TUI from a raw log view into a usable assistant interface.
 - [x] Split the view into status bar, transcript/timeline, overlays, composer, command suggestions, and footer.
-- [~] Replace plain string display messages with semantic user, assistant, tool, status, error, and system message cards.
+- [x] Replace plain string display messages with semantic user, assistant, tool, status, error, and system message cards.
 - [x] Add transcript viewport behavior with bounded height, tail follow, and scroll controls.
 - [x] Improve composer editing with cursor movement, prompt history, and common shortcuts such as Ctrl+A, Ctrl+E, Ctrl+U, and Ctrl+W.
-- [~] Add slash command palette behavior with selection, Tab completion, and command categories.
+- [x] Add slash command palette behavior with selection, Tab completion, and command categories.
 - [x] Make permission prompts modal-like with tool-specific summaries and clear allow/deny affordances.
-- [~] Improve question prompts with option selection, custom answers, and multi-select handling.
-- [~] Render tool activity as concise cards with status, changed paths, command summaries, and collapsed long output.
+- [x] Improve question prompts with option selection, custom answers, and multi-select handling.
+- [x] Render tool activity as concise cards with status, changed paths, command summaries, and collapsed long output.
 - [x] Add visible running state for thinking, active tool, queued prompts, permissions, and background tasks.
-- [ ] Defer full OpenTUI migration, mouse support, rich diff viewer, and timeline branching until the Ink TUI is usable.
+- [x] Defer full OpenTUI migration, mouse support, rich diff viewer, and timeline branching until the Ink TUI is usable.
 
 ## Phase 5: Assistant Integration
 - [ ] Add MAGI trigger policy for risky work.
