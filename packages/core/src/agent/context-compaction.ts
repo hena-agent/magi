@@ -95,6 +95,12 @@ function formatEvent(event: SessionEvent, maxToolOutputCharacters: number): stri
       return formatInterruption(event.payload);
     case "proposed_patch":
       return formatProposedPatch(event.payload);
+    case "todo_update":
+      return formatTodoUpdate(event.payload);
+    case "task_update":
+      return formatTaskUpdate(event.payload);
+    case "plan_exit":
+      return formatPlanExit(event.payload);
     default:
       return [];
   }
@@ -188,6 +194,43 @@ function formatProposedPatch(payloadValue: unknown): string[] {
   const payload = payloadValue as { summary?: unknown };
 
   return typeof payload.summary === "string" ? [`Proposed patch: ${payload.summary}`] : [];
+}
+
+function formatTodoUpdate(payloadValue: unknown): string[] {
+  const payload = payloadValue as { todos?: unknown };
+  const todos = Array.isArray(payload.todos) ? payload.todos : [];
+  const openCount = todos.filter((todo) => {
+    if (typeof todo !== "object" || todo === null || Array.isArray(todo)) return false;
+    return (todo as Record<string, unknown>).status !== "completed";
+  }).length;
+
+  return [`Todos: ${openCount} open, ${todos.length} total`];
+}
+
+function formatTaskUpdate(payloadValue: unknown): string[] {
+  const payload = payloadValue as {
+    description?: unknown;
+    status?: unknown;
+    subagentId?: unknown;
+    finalText?: unknown;
+    error?: unknown;
+  };
+  const description = typeof payload.description === "string" ? payload.description : "task";
+  const status = typeof payload.status === "string" ? payload.status : "unknown";
+  const subagent = typeof payload.subagentId === "string" ? ` (${payload.subagentId})` : "";
+  const detail = readEventDetail(payload.error, payload.finalText);
+
+  return [
+    `Task update: ${description}${subagent}: ${status}${detail ? `\n${truncateTail(detail, 1_000)}` : ""}`,
+  ];
+}
+
+function formatPlanExit(payloadValue: unknown): string[] {
+  const payload = payloadValue as { planFilePath?: unknown; approved?: unknown };
+  const path = typeof payload.planFilePath === "string" ? payload.planFilePath : "plan";
+  const approved = payload.approved === true ? "approved" : "requested";
+
+  return [`Plan exit: ${path}: ${approved}`];
 }
 
 function truncateTail(value: string, maxCharacters: number): string {

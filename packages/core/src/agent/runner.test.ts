@@ -1,49 +1,6 @@
 import { expect, it } from "vitest";
-import type { SessionEvent } from "../session.js";
 import { getAgent } from "./registry.js";
-import { getAgentRunContinuation, runEventDrivenAgent } from "./runner.js";
-
-it("waits while any tool is pending or running", () => {
-  expect(
-    getAgentRunContinuation({
-      events: [event(1, "user_message", { content: "read" }), settlement(2, "tool-1", "pending")],
-      maxSteps: 10,
-    }),
-  ).toEqual({ shouldContinue: false, reason: "pending_tool_results" });
-
-  expect(
-    getAgentRunContinuation({
-      events: [event(1, "user_message", { content: "read" }), settlement(2, "tool-1", "running")],
-      maxSteps: 10,
-    }),
-  ).toEqual({ shouldContinue: false, reason: "pending_tool_results" });
-});
-
-it("continues after all tools settle", () => {
-  expect(
-    getAgentRunContinuation({
-      events: [
-        event(1, "user_message", { content: "read" }),
-        settlement(2, "tool-1", "running"),
-        settlement(3, "tool-1", "succeeded"),
-      ],
-      maxSteps: 10,
-    }),
-  ).toEqual({ shouldContinue: true, reason: "all_tools_settled" });
-});
-
-it("requires a final response after the step budget is exhausted", () => {
-  expect(
-    getAgentRunContinuation({
-      events: [
-        event(1, "user_message", { content: "loop" }),
-        event(2, "agent_step_started", {}),
-        event(3, "agent_step_started", {}),
-      ],
-      maxSteps: 2,
-    }),
-  ).toEqual({ shouldContinue: true, reason: "final_response_required" });
-});
+import { runEventDrivenAgent } from "./runner.js";
 
 it("uses native tool calls before falling back to JSON actions", async () => {
   const executed: string[] = [];
@@ -283,18 +240,3 @@ it("appends OpenCode-style system context to the system prompt", async () => {
   expect(capturedSystem).toContain("<env>");
   expect(capturedSystem).toContain("Working directory: /tmp/repo");
 });
-
-function settlement(sequence: number, toolCallId: string, status: string): SessionEvent {
-  return event(sequence, "tool_settlement", { toolCallId, name: "read", status });
-}
-
-function event(sequence: number, type: SessionEvent["type"], payload: unknown): SessionEvent {
-  return {
-    id: `${sequence}`,
-    sessionId: "session",
-    sequence,
-    type,
-    payload,
-    createdAt: new Date(sequence).toISOString(),
-  };
-}

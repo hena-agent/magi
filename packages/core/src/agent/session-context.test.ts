@@ -58,6 +58,36 @@ describe("buildAgentSessionContext", () => {
   });
 });
 
+describe("buildAgentSessionContext Phase 3.5 events", () => {
+  it("includes session parity events in resumed context", () => {
+    const context = buildAgentSessionContext({
+      events: [
+        event(1, "todo_update", {
+          todos: [
+            { content: "done", status: "completed", priority: "low" },
+            { content: "next", status: "pending", priority: "high" },
+          ],
+        }),
+        event(2, "task_update", {
+          description: "Explore runner tests",
+          status: "completed",
+          subagentId: "explore",
+          finalText: "Found missing coverage.",
+        }),
+        event(3, "plan_exit", {
+          planFilePath: ".magi/plans/session.md",
+          approved: true,
+        }),
+      ],
+    });
+
+    expect(context).toContain("Todos: 1 open, 2 total");
+    expect(context).toContain("Task update: Explore runner tests (explore): completed");
+    expect(context).toContain("Found missing coverage.");
+    expect(context).toContain("Plan exit: .magi/plans/session.md: approved");
+  });
+});
+
 describe("buildAgentSystemContext", () => {
   it("injects environment information", () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-system-context-"));
