@@ -15,23 +15,24 @@ import {
   createToolCall,
   createToolSettlement,
   extractFirstDiffBlock,
-  getAgentCommand,
   getAuth,
   getAgent,
+  getDefaultAgentProcess,
   getDefaultModelSelection,
   getDefaultAgent,
   getEffectiveModelProviderSummaries,
   getLatestProposedPatch,
   getLatestModelSelection,
   getToolPermission,
-  listAgentCommands,
   listAgents,
   listEffectiveModelProviders,
   loadModelsDevCatalog,
   loginOpenAICodexBrowser,
   loginOpenAICodexHeadless,
+  MAGI_BUILD_PROCESS_PROMPT,
   MAGI_BUILD_SWITCH_REMINDER,
   MAGI_PLAN_MODE_PROMPT,
+  MAGI_PLAN_PROCESS_PROMPT,
   mergeAgentPermission,
   planSessionMaintenance,
   refreshOpenAICodexAuth,
@@ -41,7 +42,7 @@ import {
   selectMagiEngineCandidates,
   selectReviewLenses,
   summarizeWorkspace,
-  type AgentCommandInfo,
+  type AgentProcessId,
   type ExecutableAgentAction,
   type AgentTurnEvent,
   type AgentInfo,
@@ -149,15 +150,6 @@ export type SlashCommandInfo = {
   hidden?: boolean;
 };
 
-function agentCommandToSlashCommand(command: AgentCommandInfo): SlashCommandInfo {
-  return {
-    name: command.id,
-    usage: command.usage,
-    description: command.description,
-    category: "Current Agent",
-  };
-}
-
 const slashCommands: SlashCommandInfo[] = [
   {
     name: "model",
@@ -181,6 +173,18 @@ const slashCommands: SlashCommandInfo[] = [
     name: "agent",
     usage: "/agent [agent-id]",
     description: "List or switch agents",
+    category: "Agent",
+  },
+  {
+    name: "plan",
+    usage: "/plan [prompt]",
+    description: "Switch to the plan agent",
+    category: "Agent",
+  },
+  {
+    name: "build",
+    usage: "/build [prompt]",
+    description: "Switch to the build agent",
     category: "Agent",
   },
   { name: "queue", usage: "/queue", description: "Show queued prompts", category: "Workflow" },
@@ -369,15 +373,7 @@ function getSlashCommandSuggestions(
 }
 
 function formatSlashCommandHelp(commands: SlashCommandInfo[]): string {
-  const categories = [
-    "Current Agent",
-    "Session",
-    "Model/Auth",
-    "Agent",
-    "Workflow",
-    "MAGI",
-    "Tools",
-  ];
+  const categories = ["Session", "Model/Auth", "Agent", "Workflow", "MAGI", "Tools"];
   const lines = ["Commands:"];
 
   for (const category of categories) {
@@ -462,14 +458,10 @@ export function AppController() {
   );
   const [busyDepth, setBusyDepth] = useState(0);
   const isBusy = busyDepth > 0;
-  const activeAgentSlashCommands = listAgentCommands(activeAgent.id).map(
-    agentCommandToSlashCommand,
-  );
-  const availableSlashCommands = [...activeAgentSlashCommands, ...visibleSlashCommands];
   const slashCommandSuggestions =
     pendingPermission || pendingQuestion || pendingSelector
       ? []
-      : getSlashCommandSuggestions(prompt, availableSlashCommands);
+      : getSlashCommandSuggestions(prompt, visibleSlashCommands);
 
   useEffect(() => {
     setPromptCursor((cursor) => Math.min(cursor, prompt.length));
@@ -500,14 +492,22 @@ export function AppController() {
   }
 
   function addAgentModeReminders(content: string, agent: AgentInfo): string {
-    if (agent.id !== "plan") {
-      return content;
+    if (agent.id === "build") {
+      return [content, "", MAGI_BUILD_PROCESS_PROMPT].join("\n");
     }
+
+    if (agent.id !== "plan") return content;
 
     const planPath = getPlanFilePath();
     const planInfo = `No plan file exists yet. You should create your plan at ${planPath} using the write tool.`;
 
-    return [content, "", MAGI_PLAN_MODE_PROMPT.replace("$" + "{planInfo}", planInfo)].join("\n");
+    return [
+      content,
+      "",
+      MAGI_PLAN_MODE_PROMPT.replace("$" + "{planInfo}", planInfo),
+      "",
+      MAGI_PLAN_PROCESS_PROMPT,
+    ].join("\n");
   }
 
   useEffect(() => {
@@ -933,7 +933,7 @@ export function AppController() {
     const [command = "", ...args] = content.slice(1).split(" ");
 
     if (command === "help") {
-      addMessage(formatSlashCommandHelp(availableSlashCommands));
+      addMessage(formatSlashCommandHelp(visibleSlashCommands));
       return;
     }
 
@@ -1021,6 +1021,16 @@ export function AppController() {
       return;
     }
 
+    if (command === "plan") {
+      await switchAgentAndMaybeRun("plan", args.join(" ").trim());
+      return;
+    }
+
+    if (command === "build") {
+      await switchAgentAndMaybeRun("build", args.join(" ").trim());
+      return;
+    }
+
     if (command === "queue") {
       showQueuedPrompts();
       return;
@@ -1072,60 +1082,14 @@ export function AppController() {
       return;
     }
 
-    const agentCommand = getAgentCommand(activeAgent.id, command);
-    if (agentCommand) {
-      await executeAgentScopedCommand(agentCommand, args.join(" ").trim());
-      return;
-    }
-
     addMessage(`Unknown command: /${command}. Type /help for available commands.`);
-  }
-
-  async function executeAgentScopedCommand(
-    command: AgentCommandInfo,
-    input: string,
-  ): Promise<void> {
-    switch (command.id) {
-      case "plan":
-        await switchAgentAndMaybeRun("plan", input);
-        return;
-      case "build":
-        await switchAgentAndMaybeRun("build", input);
-        return;
-      case "done":
-        await showAgentDoneCheckpoint();
-        return;
-    }
-  }
-
-  async function showAgentDoneCheckpoint(): Promise<void> {
-    if (activeAgent.id === "plan") {
-      addMessage(
-        [
-          "Plan checkpoint:",
-          `- plan file: ${getPlanFilePath()}`,
-          "- suggested next: ask the plan agent to validate the plan, then switch to /build when ready.",
-        ].join("\n"),
-      );
-      return;
-    }
-
-    if (!session) {
-      addMessage("Build checkpoint: no saved session yet. Run a normal prompt first.");
-      return;
-    }
-
-    await runSummary();
   }
 
   async function submitAgentPrompt(
     content: string,
     agent: AgentInfo,
     providerId: string | undefined,
-    runState: Pick<ActiveRunState, "command" | "phase"> = {
-      command: "prompt",
-      phase: "running",
-    },
+    runState?: Pick<ActiveRunState, "command" | "phase">,
   ): Promise<void> {
     const userEvent = appendSessionEvent({
       type: "user_message",
@@ -1140,13 +1104,11 @@ export function AppController() {
     content: string,
     agent: AgentInfo,
     providerId: string | undefined,
-    runState: Pick<ActiveRunState, "command" | "phase"> = {
-      command: "prompt",
-      phase: "running",
-    },
+    runState?: Pick<ActiveRunState, "command" | "phase">,
   ): Promise<void> {
     beginBusy();
-    startActiveRun(agent, runState.command, runState.phase);
+    const activeRun = runState ?? getDefaultRunState(agent, "prompt");
+    startActiveRun(agent, activeRun.command, activeRun.phase);
     interruptionRequestedRef.current = false;
 
     try {
@@ -1213,6 +1175,8 @@ export function AppController() {
     agent: AgentInfo,
     providerId: string | undefined = activeProviderId,
   ): Promise<string> {
+    updateActiveRunState({ phase: inferAgentProcess(agent, action) });
+
     switch (action.type) {
       case "read":
         return await executeToolAction(createToolCall("read", { path: action.path }), agent);
@@ -1345,6 +1309,24 @@ export function AppController() {
       case "invalid_tool":
         return `Invalid native tool call: ${action.toolName}\nReason: ${action.reason}`;
     }
+  }
+
+  function inferAgentProcess(
+    agent: AgentInfo,
+    action: ExecutableAgentAction,
+  ): AgentProcessId | string {
+    if (agent.id === "plan") {
+      if (action.type === "question") return "validate";
+      if (action.type === "plan_exit") return "done";
+      return action.type === "write" || action.type === "edit" ? "compose" : "spec";
+    }
+
+    if (agent.id === "build") {
+      if (action.type === "verify") return "verify";
+      return "execute";
+    }
+
+    return getDefaultAgentProcess(agent.id) ?? "running";
   }
 
   async function runPlanExit(agent: AgentInfo): Promise<string> {
@@ -1868,7 +1850,7 @@ export function AppController() {
     beginBusy();
     const toolSummary = formatToolCallSummary(call);
     setActiveStatus(`Running ${toolSummary}`);
-    updateActiveRunState({ phase: "tool", detail: toolSummary });
+    updateActiveRunState({ detail: toolSummary });
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     appendSessionEvent({ type: "tool_call", payload: call });
@@ -1955,7 +1937,7 @@ export function AppController() {
     }
 
     beginBusy();
-    updateActiveRunState({ phase: "subprocess verify", detail: command || "configured commands" });
+    updateActiveRunState({ phase: "verify", detail: command || "configured commands" });
 
     try {
       setActiveStatus(`Running ${command || "configured verification"}`);
@@ -2313,7 +2295,7 @@ export function AppController() {
 
     await submitAgentPrompt(content, agent, activeProviderId, {
       command: `/${agentId}`,
-      phase: agentId === "plan" ? "planning" : "building",
+      phase: getDefaultAgentProcess(agent.id) ?? "running",
     });
   }
 
@@ -2768,7 +2750,7 @@ export function AppController() {
     switch (event.type) {
       case "assistant_started":
         setActiveStatus("Thinking...");
-        updateActiveRunState({ phase: "thinking", detail: undefined });
+        updateActiveRunState({ detail: "thinking" });
         return;
       case "provider_error":
         setActiveStatus("Provider error");
@@ -2776,8 +2758,12 @@ export function AppController() {
         return;
       case "agent_step_ended": {
         const payload = event.payload as { status?: unknown };
-        setActiveStatus(`Step ${String(payload.status ?? "ended")}`);
-        updateActiveRunState({ phase: String(payload.status ?? "ended"), detail: undefined });
+        const status = String(payload.status ?? "ended");
+        setActiveStatus(`Step ${status}`);
+        updateActiveRunState({
+          ...(status === "completed" ? { phase: "done" } : {}),
+          detail: undefined,
+        });
         return;
       }
       case "agent_step_started": {
@@ -2788,10 +2774,9 @@ export function AppController() {
         };
         setActiveStatus("Preparing next step...");
         updateActiveRunState({
-          phase: String(payload.reason ?? "thinking"),
           step: typeof payload.iteration === "number" ? payload.iteration : undefined,
           maxSteps: typeof payload.maxIterations === "number" ? payload.maxIterations : undefined,
-          detail: undefined,
+          detail: String(payload.reason ?? "thinking"),
         });
         return;
       }
@@ -2926,6 +2911,13 @@ export function AppController() {
 
   function startActiveRun(agent: AgentInfo, command: string, phase: string): void {
     setActiveRunState({ agentId: agent.id, command, phase });
+  }
+
+  function getDefaultRunState(
+    agent: AgentInfo,
+    command: string,
+  ): Pick<ActiveRunState, "command" | "phase"> {
+    return { command, phase: getDefaultAgentProcess(agent.id) ?? "running" };
   }
 
   function updateActiveRunState(update: Partial<ActiveRunState>): void {

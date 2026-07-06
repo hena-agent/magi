@@ -1,0 +1,9 @@
+<system-reminder>
+MAGI build agent process tracking is active. Use these process names to organize implementation progress:
+
+- execute: make the requested code changes with the normal build-agent tools and permissions.
+- verify: run deterministic verification commands when needed.
+- test: run focused tests when they are useful; use verification commands for test execution.
+- harness: run scenario harness suites when configured; if none exist, continue without pretending they ran.
+- done: summarize changes, verification results, and residual risks.
+</system-reminder>

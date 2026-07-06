@@ -48,9 +48,9 @@ See [`AI_LOOP.md`](./AI_LOOP.md) for a more detailed walkthrough of the current 
 - Provider-native tool calls are preferred when the model supports them; JSON action fallback remains available for compatibility.
 - Unknown or malformed native tool calls become explicit `invalid_tool` observations so the model can recover without hiding provider mistakes.
 - Tool execution records pending, running, succeeded, failed, denied, and interrupted settlement states where applicable.
-- Slash commands are split between global shell commands and a small user-facing active-agent command surface. Plan exposes `/plan` and `/done`; build exposes `/plan`, `/build`, and `/done`.
+- Slash commands are split between global shell commands and primary agent entry commands. `/plan` enters the plan agent and `/build` enters the build agent.
+- Agent subprocesses are internal progress states rather than user-facing slash commands: plan uses `spec -> validate -> compose -> done`; build uses `execute -> verify -> test -> harness -> done`.
 - Validation, verification, focused tests, and future harness suites are agent-invoked subprocesses/tools rather than user-facing slash commands.
-- `/done` is a checkpoint or summary command, not a central state transition.
 - The `plan` agent is read-only by default but may write or edit only its exact plan file under `.magi/plans/` during plan-mode work.
 - The `task` tool supports foreground subagents for blocking research/work and background subagents for independent work that records `task_update` events.
 - Background tasks require a saved session, write events to the session where they started, and deny prompt-gated permissions rather than blocking on interactive approval.

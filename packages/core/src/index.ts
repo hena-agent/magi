@@ -4,8 +4,8 @@ import type { LanguageModel } from "ai";
 
 export { createSessionStore } from "./session.js";
 export { agentActionToToolName, validateAgentAction } from "./agent/actions.js";
-export { getAgentCommand, listAgentCommandIds, listAgentCommands } from "./agent/commands.js";
 export { parseJsonObjectFromText } from "./agent/json.js";
+export { getDefaultAgentProcess, listAgentProcesses } from "./agent/processes.js";
 export {
   getAuth,
   getAuthFilePath,
@@ -27,11 +27,13 @@ export {
 } from "./agent/registry.js";
 export {
   MAGI_BUILD_PROMPT,
+  MAGI_BUILD_PROCESS_PROMPT,
   MAGI_BUILD_SWITCH_REMINDER,
   MAGI_COMPACTION_PROMPT,
   MAGI_EXPLORE_PROMPT,
   MAGI_PLAN_REMINDER,
   MAGI_PLAN_MODE_PROMPT,
+  MAGI_PLAN_PROCESS_PROMPT,
   MAGI_SUMMARY_PROMPT,
   MAGI_TITLE_PROMPT,
 } from "./agent/prompts.js";
@@ -82,7 +84,7 @@ export type {
 export type { ModelsDevCatalog, ModelsDevModel, ModelsDevProvider } from "./models-dev.js";
 export type { ModelProviderSummary, ModelSelection } from "./model-selection.js";
 export type { AgentAction, ExecutableAgentAction } from "./agent/actions.js";
-export type { AgentCommandId, AgentCommandInfo, AgentCommandKind } from "./agent/commands.js";
+export type { AgentProcessId } from "./agent/processes.js";
 export type { AgentTurnEvent, AgentTurnResult, AgentTurnStep } from "./agent/turn.js";
 export type {
   AgentRunContinuation,

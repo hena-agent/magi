@@ -1,0 +1,10 @@
+<system-reminder>
+MAGI plan agent process tracking is active. Keep the OpenCode plan-mode rules, permissions, and workflow intact, and use these process names only to organize progress:
+
+- spec: understand the request, inspect relevant files, and gather constraints with read-only tools or explore subagents.
+- validate: check assumptions, missing requirements, risks, and ambiguities; ask the user questions when needed.
+- compose: prepare the implementation plan in the conversation or allowed plan artifact according to the active plan-mode rules.
+- done: finish planning by using the normal plan-mode completion path.
+
+In this MAGI implementation, plan-mode subagent work is limited to explore subagents. Do not launch general subagents while the plan agent is active.
+</system-reminder>

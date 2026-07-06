@@ -189,7 +189,6 @@ Inside the TUI:
 /agent
 /plan
 /build
-/done
 /queue
 /clear_queue
 /steer Use focused tests first
@@ -214,13 +213,11 @@ Notes:
 - `/auth` manages OpenAI OAuth credentials for built-in Codex-style OpenAI model providers.
 - `/model` opens a selector when run without arguments; `/model status`, `/model reset`, and `/model <provider-id>` remain available.
 - `/agent` opens a selector when run without arguments; `/agent <agent-id>` switches directly.
-- `/help` includes the active agent's command surface first, followed by global commands.
-- `/plan`, `/build`, and `/done` are user-facing active-agent commands, not global workflow stages.
-- The plan agent exposes `/plan` and `/done`. It can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
-- The build agent exposes `/plan`, `/build`, and `/done`.
+- `/plan` and `/build` are user-facing agent entry commands.
+- The plan agent follows the internal process sequence `spec -> validate -> compose -> done` while preserving the OpenCode-style plan-mode rules.
+- The build agent follows the internal process sequence `execute -> verify -> test -> harness -> done`.
 - `/queue`, `/clear_queue`, `/steer`, and `/interrupt` control active or queued agent runs.
 - Validation, verification, focused tests, and future harness suites are agent-invoked subprocesses/tools. Ask the active agent in plain language to validate, verify, or run tests.
-- `/done` is a checkpoint: plan mode reports the plan file and next step, build mode summarizes the session.
 - `/revise` asks the active agent to revise from recent verification failures.
 - `/summary` reports changed files, verification results, and residual risk.
 - File reads, search, LSP, web fetch/search, shell, and patch application are agent tools rather than user-facing slash commands; ask the agent in plain language to use them.
