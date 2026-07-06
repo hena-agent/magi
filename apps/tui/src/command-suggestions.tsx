@@ -21,7 +21,7 @@ export function CommandSuggestions(props: {
             color={selected ? "black" : undefined}
             backgroundColor={selected ? "cyan" : undefined}
           >
-            {`${selected ? "›" : " "} ${command.usage}  ${command.description}`}
+            {`${selected ? "›" : " "} ${command.usage}  [${command.category ?? "Tools"}] ${command.description}`}
           </Text>
         );
       })}

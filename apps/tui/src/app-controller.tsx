@@ -131,6 +131,7 @@ export type SlashCommandInfo = {
   name: string;
   usage: string;
   description: string;
+  category?: string;
   aliases?: string[];
   hidden?: boolean;
 };
@@ -140,44 +141,100 @@ const slashCommands: SlashCommandInfo[] = [
     name: "model",
     usage: "/model [provider-id|status|reset]",
     description: "List or switch AI models",
+    category: "Model/Auth",
   },
   {
     name: "mode",
     usage: "/mode",
     description: "Show current MAGI mode, agent, model, and session",
+    category: "Workflow",
   },
   {
     name: "auth",
     usage: "/auth status|login|refresh|logout openai",
     description: "Manage OpenAI OAuth auth",
+    category: "Model/Auth",
   },
-  { name: "agent", usage: "/agent [agent-id]", description: "List or switch agents" },
+  {
+    name: "agent",
+    usage: "/agent [agent-id]",
+    description: "List or switch agents",
+    category: "Agent",
+  },
   {
     name: "plan",
     usage: "/plan [prompt]",
     description: "Switch to plan agent, optionally run prompt",
+    category: "Agent",
   },
   {
     name: "build",
     usage: "/build [prompt]",
     description: "Switch to build agent, optionally run prompt",
+    category: "Agent",
   },
-  { name: "queue", usage: "/queue", description: "Show queued prompts" },
-  { name: "clear_queue", usage: "/clear_queue", description: "Clear queued prompts" },
-  { name: "steer", usage: "/steer <message>", description: "Add steering input for the next run" },
+  { name: "queue", usage: "/queue", description: "Show queued prompts", category: "Workflow" },
+  {
+    name: "clear_queue",
+    usage: "/clear_queue",
+    description: "Clear queued prompts",
+    category: "Workflow",
+  },
+  {
+    name: "steer",
+    usage: "/steer <message>",
+    description: "Add steering input for the next run",
+    category: "Workflow",
+  },
   {
     name: "interrupt",
     usage: "/interrupt",
     description: "Stop the current run at the next safe point",
+    category: "Workflow",
   },
-  { name: "verify", usage: "/verify [command]", description: "Run verification command" },
-  { name: "revise", usage: "/revise", description: "Revise from recent verification failures" },
-  { name: "summary", usage: "/summary", description: "Summarize the workspace" },
-  { name: "sessions", usage: "/sessions [all]", description: "List recent sessions" },
-  { name: "resume", usage: "/resume <session-id|number>", description: "Resume a saved session" },
-  { name: "new", usage: "/new", description: "Start a new draft session" },
-  { name: "rename", usage: "/rename <title>", description: "Rename the current session" },
-  { name: "history", usage: "/history [limit]", description: "Show session event history" },
+  {
+    name: "verify",
+    usage: "/verify [command]",
+    description: "Run verification command",
+    category: "Workflow",
+  },
+  {
+    name: "revise",
+    usage: "/revise",
+    description: "Revise from recent verification failures",
+    category: "Workflow",
+  },
+  {
+    name: "summary",
+    usage: "/summary",
+    description: "Summarize the workspace",
+    category: "Session",
+  },
+  {
+    name: "sessions",
+    usage: "/sessions [all]",
+    description: "List recent sessions",
+    category: "Session",
+  },
+  {
+    name: "resume",
+    usage: "/resume <session-id|number>",
+    description: "Resume a saved session",
+    category: "Session",
+  },
+  { name: "new", usage: "/new", description: "Start a new draft session", category: "Session" },
+  {
+    name: "rename",
+    usage: "/rename <title>",
+    description: "Rename the current session",
+    category: "Session",
+  },
+  {
+    name: "history",
+    usage: "/history [limit]",
+    description: "Show session event history",
+    category: "Session",
+  },
   { name: "read", usage: "/read <path>", description: "Read a workspace file", hidden: true },
   {
     name: "glob",
@@ -282,7 +339,7 @@ const slashCommands: SlashCommandInfo[] = [
     description: "Show sessions that look safe to clean up",
     hidden: true,
   },
-  { name: "help", usage: "/help", description: "Show command list" },
+  { name: "help", usage: "/help", description: "Show command list", category: "Workflow" },
 ];
 const visibleSlashCommands = slashCommands.filter((command) => command.hidden !== true);
 
@@ -302,6 +359,23 @@ function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
       return names.some((name) => name.toLowerCase().startsWith(rawQuery));
     })
     .slice(0, 8);
+}
+
+function formatSlashCommandHelp(commands: SlashCommandInfo[]): string {
+  const categories = ["Session", "Model/Auth", "Agent", "Workflow", "MAGI", "Tools"];
+  const lines = ["Commands:"];
+
+  for (const category of categories) {
+    const categoryCommands = commands.filter(
+      (command) => (command.category ?? "Tools") === category,
+    );
+    if (categoryCommands.length === 0) continue;
+
+    lines.push("", `${category}:`);
+    lines.push(...categoryCommands.map((command) => `${command.usage} - ${command.description}`));
+  }
+
+  return lines.join("\n");
 }
 
 const defaultSessionTitle = "MAGI TUI session";
@@ -802,9 +876,7 @@ export function AppController() {
     const [command = "", ...args] = content.slice(1).split(" ");
 
     if (command === "help") {
-      addMessage(
-        `Commands:\n${visibleSlashCommands.map((slashCommand) => `${slashCommand.usage} - ${slashCommand.description}`).join("\n")}`,
-      );
+      addMessage(formatSlashCommandHelp(visibleSlashCommands));
       return;
     }
 
