@@ -248,6 +248,10 @@ MAGI stores local session history in:
 
 The database is ignored by git. It contains sessions and append-only session events such as user messages, assistant messages, tool calls, tool settlements, permission decisions, verification results, todo updates, task updates, plan exits, context summaries, and summaries.
 
+## AI Loop
+
+For a readable walkthrough of the current prompt → model action → tool execution → observation → final answer flow, see [`AI_LOOP.md`](./AI_LOOP.md).
+
 ## Current Status
 
 Phase 0 through Phase 3 are complete. Phase 3.5 runner/session/tool parity is complete for the current bootstrap scope: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `websearch`, `skill`, foreground/background `task`, invalid-tool handling, and TypeScript/JavaScript LSP tools including call hierarchy are implemented. Phase 4 multi-provider foundations and configurable MAGI engine selection are in place. Phase 4.5 TUI usability is complete for the Ink baseline: startup dashboard, status/footer affordances, transcript viewport, selectors, semantic message cards, concise tool cards, and interactive question prompts are implemented. Plugin/custom tool registry work is deferred until sandbox and permission boundaries are clearer.

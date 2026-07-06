@@ -32,6 +32,8 @@
 - Audit store: persists enough data to reconstruct plans, diffs, logs, reviews, votes, and final decisions.
 
 ## Normal Agent Loop
+See [`AI_LOOP.md`](./AI_LOOP.md) for a more detailed walkthrough of the current implementation.
+
 1. Receive the user task.
 2. Inspect high-value repo sources before guessing.
 3. Produce a compact plan when the task is non-trivial.
