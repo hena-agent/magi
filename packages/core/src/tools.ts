@@ -108,6 +108,7 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
       case "lsp_definition":
       case "lsp_references":
       case "lsp_hover":
+      case "lsp_call_hierarchy":
         return createOkResult(call, await lspTool(call.name, call.input, runtime));
       case "task":
         throw new Error("task is executed by the agent runner, not the core tool runtime.");

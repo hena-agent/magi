@@ -1,5 +1,9 @@
 import type { ToolName } from "../tools.js";
-import { readPositiveInteger } from "./actions-input.js";
+import {
+  isLspPositionActionType,
+  readLspPositionAction,
+  type LspPositionAgentAction,
+} from "./actions-lsp.js";
 import { readWebsearchAction, type WebsearchAgentAction } from "./actions-websearch.js";
 
 export type AgentAction =
@@ -16,9 +20,7 @@ export type AgentAction =
   | { type: "question"; questions: unknown[] }
   | { type: "skill"; name: string }
   | { type: "lsp_symbols"; filePath: string }
-  | { type: "lsp_definition"; filePath: string; line: number; character: number }
-  | { type: "lsp_references"; filePath: string; line: number; character: number }
-  | { type: "lsp_hover"; filePath: string; line: number; character: number }
+  | LspPositionAgentAction
   | {
       type: "task";
       description: string;
@@ -118,24 +120,6 @@ function readProposePatchAction(action: Record<string, unknown>): AgentAction {
   };
 }
 
-function isLspPositionActionType(
-  type: string,
-): type is "lsp_definition" | "lsp_references" | "lsp_hover" {
-  return type === "lsp_definition" || type === "lsp_references" || type === "lsp_hover";
-}
-
-function readLspPositionAction(
-  action: Record<string, unknown>,
-  type: "lsp_definition" | "lsp_references" | "lsp_hover",
-): AgentAction {
-  return {
-    type,
-    filePath: readString(action, "filePath"),
-    line: readPositiveInteger(action, "line"),
-    character: readPositiveInteger(action, "character"),
-  };
-}
-
 function readGrepAction(action: Record<string, unknown>): AgentAction {
   const include = readOptionalString(action, "include");
 
@@ -199,6 +183,7 @@ export function agentActionToToolName(action: ExecutableAgentAction): ToolName |
     action.type === "lsp_definition" ||
     action.type === "lsp_references" ||
     action.type === "lsp_hover" ||
+    action.type === "lsp_call_hierarchy" ||
     action.type === "task" ||
     action.type === "plan_exit"
   ) {

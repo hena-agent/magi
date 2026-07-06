@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import {
@@ -9,15 +8,34 @@ import {
   StreamMessageWriter,
   type MessageConnection,
 } from "vscode-jsonrpc/node";
+import {
+  formatCallHierarchy,
+  formatHover,
+  formatLocations,
+  formatSymbols,
+  type LspCallHierarchyDirection,
+} from "./lsp-format.js";
 import { getNumberField, getStringField, readObject } from "./input.js";
-import { resolveWorkspacePath, toPosix } from "./path.js";
+import { resolveWorkspacePath } from "./path.js";
 import type { ToolRuntime } from "./types.js";
 
-export type LspToolName = "lsp_symbols" | "lsp_definition" | "lsp_references" | "lsp_hover";
+export type LspToolName =
+  | "lsp_symbols"
+  | "lsp_definition"
+  | "lsp_references"
+  | "lsp_hover"
+  | "lsp_call_hierarchy";
 
 type LspClient = {
   connection: MessageConnection;
   process: ReturnType<typeof spawn>;
+};
+
+type LspInput = {
+  filePath: string;
+  line?: number;
+  character?: number;
+  direction?: LspCallHierarchyDirection;
 };
 
 const require = createRequire(import.meta.url);
@@ -40,57 +58,66 @@ export async function lspTool(
       textDocument: { uri, languageId: languageIdForFile(filePath), version: 1, text },
     });
 
-    switch (toolName) {
-      case "lsp_symbols":
-        return formatSymbols(
-          await withTimeout(
-            client.connection.sendRequest("textDocument/documentSymbol", {
-              textDocument: { uri },
-            }),
-            "document symbols",
-          ),
-        );
-      case "lsp_definition":
-        return formatLocations(
-          await withTimeout(
-            client.connection.sendRequest("textDocument/definition", {
-              textDocument: { uri },
-              position: toLspPosition(inputObject),
-            }),
-            "definition",
-          ),
-        );
-      case "lsp_references":
-        return formatLocations(
-          await withTimeout(
-            client.connection.sendRequest("textDocument/references", {
-              textDocument: { uri },
-              position: toLspPosition(inputObject),
-              context: { includeDeclaration: true },
-            }),
-            "references",
-          ),
-        );
-      case "lsp_hover":
-        return formatHover(
-          await withTimeout(
-            client.connection.sendRequest("textDocument/hover", {
-              textDocument: { uri },
-              position: toLspPosition(inputObject),
-            }),
-            "hover",
-          ),
-        );
-    }
+    return await executeLspRequest(toolName, client.connection, uri, inputObject);
   } finally {
     await stopTypescriptLanguageServer(client);
   }
 }
 
-function readLspInput(
+async function executeLspRequest(
   toolName: LspToolName,
-  input: unknown,
-): { filePath: string; line?: number; character?: number } {
+  connection: MessageConnection,
+  uri: string,
+  input: LspInput,
+): Promise<string> {
+  switch (toolName) {
+    case "lsp_symbols":
+      return formatSymbols(
+        await withTimeout(
+          connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }),
+          "document symbols",
+        ),
+      );
+    case "lsp_definition":
+      return formatLocations(
+        await withTimeout(
+          connection.sendRequest("textDocument/definition", {
+            textDocument: { uri },
+            position: toLspPosition(input),
+          }),
+          "definition",
+        ),
+      );
+    case "lsp_references":
+      return formatLocations(
+        await withTimeout(
+          connection.sendRequest("textDocument/references", {
+            textDocument: { uri },
+            position: toLspPosition(input),
+            context: { includeDeclaration: true },
+          }),
+          "references",
+        ),
+      );
+    case "lsp_hover":
+      return formatHover(
+        await withTimeout(
+          connection.sendRequest("textDocument/hover", {
+            textDocument: { uri },
+            position: toLspPosition(input),
+          }),
+          "hover",
+        ),
+      );
+    case "lsp_call_hierarchy":
+      return await formatCallHierarchy(
+        { connection, uri, position: toLspPosition(input), direction: input.direction ?? "both" },
+        withTimeout,
+      );
+  }
+}
+
+function readLspInput(toolName: LspToolName, input: unknown): LspInput {
   const inputObject = readObject(
     input,
     toolName === "lsp_symbols" ? ["filePath"] : ["filePath", "line", "character"],
@@ -103,6 +130,7 @@ function readLspInput(
 
   const line = getNumberField(inputObject, "line");
   const character = getNumberField(inputObject, "character");
+  const direction = readOptionalCallHierarchyDirection(inputObject);
 
   if (!Number.isInteger(line) || line < 1) {
     throw new Error("LSP line must be a positive 1-based integer.");
@@ -112,7 +140,19 @@ function readLspInput(
     throw new Error("LSP character must be a positive 1-based integer.");
   }
 
-  return { filePath, line, character };
+  return { filePath, line, character, ...(direction === undefined ? {} : { direction }) };
+}
+
+function readOptionalCallHierarchyDirection(
+  input: Record<string, unknown>,
+): LspCallHierarchyDirection | undefined {
+  const direction = input.direction;
+  if (direction === undefined) return undefined;
+  if (direction === "incoming" || direction === "outgoing" || direction === "both") {
+    return direction;
+  }
+
+  throw new Error("LSP call hierarchy direction must be incoming, outgoing, or both.");
 }
 
 function startTypescriptLanguageServer(workspaceRoot: string): LspClient {
@@ -147,6 +187,7 @@ async function initializeLsp(connection: MessageConnection, workspaceRoot: strin
         documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },
         hover: { dynamicRegistration: false, contentFormat: ["markdown", "plaintext"] },
         references: { dynamicRegistration: false },
+        callHierarchy: { dynamicRegistration: false },
       },
     },
   });
@@ -155,11 +196,9 @@ async function initializeLsp(connection: MessageConnection, workspaceRoot: strin
 
 async function stopTypescriptLanguageServer(client: LspClient): Promise<void> {
   try {
-    await Promise.race([
-      client.connection.sendRequest("shutdown"),
-      new Promise((resolve) => setTimeout(resolve, 500)),
-    ]);
-    client.connection.sendNotification("exit");
+    const shutdown = client.connection.sendRequest("shutdown").catch(() => undefined);
+    await Promise.race([shutdown, new Promise((resolve) => setTimeout(resolve, 500))]);
+    await Promise.resolve(client.connection.sendNotification("exit")).catch(() => undefined);
   } finally {
     client.connection.dispose();
     if (!client.process.killed) {
@@ -201,89 +240,4 @@ function languageIdForFile(filePath: string): string {
   }
 
   return "typescript";
-}
-
-function formatSymbols(value: unknown): string {
-  const symbols = Array.isArray(value) ? value : [];
-  const lines = symbols.flatMap((symbol) => formatSymbol(symbol, 0));
-
-  return lines.length === 0 ? "No document symbols found." : lines.join("\n");
-}
-
-function formatSymbol(value: unknown, depth: number): string[] {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-
-  const symbol = value as Record<string, unknown>;
-  const name = typeof symbol.name === "string" ? symbol.name : "(anonymous)";
-  const detail =
-    typeof symbol.detail === "string" && symbol.detail.length > 0 ? ` ${symbol.detail}` : "";
-  const range = readRange(symbol.selectionRange ?? symbol.range);
-  const children = Array.isArray(symbol.children) ? symbol.children : [];
-
-  return [
-    `${"  ".repeat(depth)}- ${name}${detail}${range ? ` @ ${range}` : ""}`,
-    ...children.flatMap((child) => formatSymbol(child, depth + 1)),
-  ];
-}
-
-function formatLocations(value: unknown): string {
-  const locations = Array.isArray(value) ? value : value ? [value] : [];
-  const lines = locations.flatMap(formatLocation);
-
-  return lines.length === 0 ? "No locations found." : lines.join("\n");
-}
-
-function formatLocation(value: unknown): string[] {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-
-  const location = value as Record<string, unknown>;
-  const uri = typeof location.uri === "string" ? location.uri : undefined;
-  const range = readRange(location.range);
-
-  if (!uri) return [];
-
-  return [`${formatUri(uri)}${range ? `:${range}` : ""}`];
-}
-
-function formatHover(value: unknown): string {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return "No hover information found.";
-  }
-
-  const hover = value as Record<string, unknown>;
-  const contents = hover.contents;
-
-  return formatMarkup(contents) || "No hover information found.";
-}
-
-function formatMarkup(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) return value.map(formatMarkup).filter(Boolean).join("\n\n");
-  if (typeof value !== "object" || value === null) return "";
-
-  const record = value as Record<string, unknown>;
-  if (typeof record.value === "string") return record.value.trim();
-
-  return "";
-}
-
-function readRange(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-
-  const start = (value as Record<string, unknown>).start;
-  if (typeof start !== "object" || start === null || Array.isArray(start)) return undefined;
-
-  const position = start as Record<string, unknown>;
-  return typeof position.line === "number" && typeof position.character === "number"
-    ? `${position.line + 1}:${position.character + 1}`
-    : undefined;
-}
-
-function formatUri(uri: string): string {
-  if (!uri.startsWith("file://")) return uri;
-
-  const filePath = new URL(uri).pathname;
-  const relativePath = relative(process.cwd(), filePath);
-
-  return toPosix(relativePath.startsWith("..") ? filePath : relativePath || dirname("/"));
 }

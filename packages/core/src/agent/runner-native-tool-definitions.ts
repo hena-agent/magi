@@ -159,6 +159,22 @@ export const readNativeToolDefinitions = [
     },
   },
   {
+    name: "lsp_call_hierarchy" as const,
+    description:
+      "Show incoming and/or outgoing calls for a symbol in a TypeScript or JavaScript file. line and character are 1-based.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        line: { type: "number" },
+        character: { type: "number" },
+        direction: { type: "string", enum: ["incoming", "outgoing", "both"] },
+      },
+      required: ["filePath", "line", "character"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "task" as const,
     description:
       "Launch a subagent task. Use foreground by default; set background true only when the task can run independently while the parent continues.",

@@ -77,6 +77,7 @@ function readKnownToolCall(name: ToolName, input: Record<string, unknown>): Exec
     case "lsp_definition":
     case "lsp_references":
     case "lsp_hover":
+    case "lsp_call_hierarchy":
       return readLspPositionAction(name, input);
     case "task":
       return readTaskAction(input);
@@ -122,21 +123,37 @@ function isToolName(value: string): value is ToolName {
     value === "lsp_definition" ||
     value === "lsp_references" ||
     value === "lsp_hover" ||
+    value === "lsp_call_hierarchy" ||
     value === "task" ||
     value === "plan_exit"
   );
 }
 
 function readLspPositionAction(
-  type: "lsp_definition" | "lsp_references" | "lsp_hover",
+  type: "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_call_hierarchy",
   input: Record<string, unknown>,
 ): ExecutableAgentAction {
+  const direction = readOptionalLspCallHierarchyDirection(input);
+
   return {
     type,
     filePath: readString(input, "filePath"),
     line: readPositiveInteger(input, "line"),
     character: readPositiveInteger(input, "character"),
+    ...(type === "lsp_call_hierarchy" && direction !== undefined ? { direction } : {}),
   };
+}
+
+function readOptionalLspCallHierarchyDirection(
+  input: Record<string, unknown>,
+): "incoming" | "outgoing" | "both" | undefined {
+  const direction = input.direction;
+  if (direction === undefined) return undefined;
+  if (direction === "incoming" || direction === "outgoing" || direction === "both") {
+    return direction;
+  }
+
+  throw new Error("Native tool input field direction must be incoming, outgoing, or both");
 }
 
 function formatError(error: unknown): string {

@@ -40,6 +40,8 @@ export function getActionKey(action: ExecutableAgentAction): string {
     case "lsp_references":
     case "lsp_hover":
       return `${action.type}:${action.filePath}:${action.line}:${action.character}`;
+    case "lsp_call_hierarchy":
+      return `${action.type}:${action.filePath}:${action.line}:${action.character}:${action.direction ?? "both"}`;
     case "task":
       return `task:${action.background === true ? "background" : "foreground"}:${action.subagent_type}:${action.prompt}`;
     case "plan_exit":

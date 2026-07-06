@@ -15,6 +15,7 @@ export type ToolName =
   | "lsp_definition"
   | "lsp_references"
   | "lsp_hover"
+  | "lsp_call_hierarchy"
   | "task"
   | "plan_exit";
 

@@ -27,6 +27,30 @@ it("validates LSP actions", () => {
       character: 1,
     }),
   ).toThrow(/positive integer/);
+  expect(
+    validateAgentAction({
+      type: "lsp_call_hierarchy",
+      filePath: "src/index.ts",
+      line: 1,
+      character: 1,
+      direction: "incoming",
+    }),
+  ).toEqual({
+    type: "lsp_call_hierarchy",
+    filePath: "src/index.ts",
+    line: 1,
+    character: 1,
+    direction: "incoming",
+  });
+  expect(() =>
+    validateAgentAction({
+      type: "lsp_call_hierarchy",
+      filePath: "src/index.ts",
+      line: 1,
+      character: 1,
+      direction: "sideways",
+    }),
+  ).toThrow(/direction/);
 });
 
 it("maps LSP actions to tool names", () => {
@@ -41,4 +65,12 @@ it("maps LSP actions to tool names", () => {
       character: 1,
     }),
   ).toBe("lsp_hover");
+  expect(
+    agentActionToToolName({
+      type: "lsp_call_hierarchy",
+      filePath: "src/index.ts",
+      line: 1,
+      character: 1,
+    }),
+  ).toBe("lsp_call_hierarchy");
 });

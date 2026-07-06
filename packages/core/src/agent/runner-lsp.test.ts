@@ -24,4 +24,5 @@ it("exposes LSP tools as read native tools", async () => {
   expect(tools).toContain("lsp_definition");
   expect(tools).toContain("lsp_references");
   expect(tools).toContain("lsp_hover");
+  expect(tools).toContain("lsp_call_hierarchy");
 });

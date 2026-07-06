@@ -143,6 +143,13 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
     { type: "lsp_references", filePath: "src/file.ts", line: 1, character: 1 },
     { type: "lsp_hover", filePath: "src/file.ts", line: 1, character: 1 },
     {
+      type: "lsp_call_hierarchy",
+      filePath: "src/file.ts",
+      line: 1,
+      character: 1,
+      direction: "both",
+    },
+    {
       type: "task",
       description: "short task description",
       prompt: "Detailed instructions for the subagent",
