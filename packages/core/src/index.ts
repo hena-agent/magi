@@ -4,6 +4,7 @@ import type { LanguageModel } from "ai";
 
 export { createSessionStore } from "./session.js";
 export { agentActionToToolName, validateAgentAction } from "./agent/actions.js";
+export { getAgentCommand, listAgentCommandIds, listAgentCommands } from "./agent/commands.js";
 export { parseJsonObjectFromText } from "./agent/json.js";
 export {
   getAuth,
@@ -81,6 +82,7 @@ export type {
 export type { ModelsDevCatalog, ModelsDevModel, ModelsDevProvider } from "./models-dev.js";
 export type { ModelProviderSummary, ModelSelection } from "./model-selection.js";
 export type { AgentAction, ExecutableAgentAction } from "./agent/actions.js";
+export type { AgentCommandId, AgentCommandInfo, AgentCommandKind } from "./agent/commands.js";
 export type { AgentTurnEvent, AgentTurnResult, AgentTurnStep } from "./agent/turn.js";
 export type {
   AgentRunContinuation,
