@@ -36,6 +36,7 @@ It is responsible for:
 
 - Receiving plain-text prompts and slash commands.
 - Tracking the active agent, model provider, session, queue, permissions, and overlays.
+- Combining global slash commands with the active agent's command registry for suggestions, help, and dispatch.
 - Appending session events such as `user_message`, `assistant_message`, `tool_call`, `tool_result`, and `tool_settlement`.
 - Building session and system context before a model turn starts.
 - Translating model actions into concrete tool calls.
@@ -92,6 +93,23 @@ runAgentTurn(...)
 ```
 
 The session context intentionally excludes the just-appended user event when constructing previous context, because the active prompt is passed separately as `userMessage`.
+
+## Slash Command Routing
+
+Slash commands do not form a separate workflow engine. The TUI routes them before a normal model turn starts.
+
+Global commands handle shell state such as sessions, model selection, auth, queues, summaries, and MAGI previews. Active-agent commands are provided by the selected agent:
+
+- `plan`: `/plan`, `/validate`, `/done`.
+- `build`: `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, `/done`.
+
+Agent commands either start an agent turn or run a deterministic local action:
+
+- `/plan` and `/build` switch agent context and optionally submit a prompt.
+- `/validate` submits a model-driven validation prompt to the active agent.
+- `/verify` and `/test` run configured or focused verification commands.
+- `/harness` is reserved for future scenario harness suites.
+- `/done` reports a checkpoint or session summary; it is not a mandatory transition.
 
 ## Per-Step Runner Flow
 
@@ -287,6 +305,8 @@ assistant_started
 agent_step_ended
 provider_error
 ```
+
+`agent_step_started` includes step progress metadata when available, so the TUI can render current command, agent, phase, and `step n/max` while a run is active.
 
 The TUI consumes those events to update visible state:
 

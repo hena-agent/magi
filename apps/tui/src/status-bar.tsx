@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import type { ActiveRunState } from "./app-controller.js";
 
 export type StatusBarProps = {
   activeAgentId: string;
@@ -39,6 +40,7 @@ export function StatusBar(props: StatusBarProps) {
 }
 
 export type FooterBarProps = {
+  activeRunState: ActiveRunState | undefined;
   activeStatus: string;
   canReadInput: boolean;
   isBusy: boolean;
@@ -55,7 +57,7 @@ export function FooterBar(props: FooterBarProps) {
     <Box flexDirection="column">
       <Text>
         <Text color={props.isBusy ? "yellow" : "green"}>{props.isBusy ? "running" : "ready"}</Text>
-        {`  queued ${props.queuedPromptCount}  ${props.activeStatus}`}
+        {`  queued ${props.queuedPromptCount}  ${formatActiveProgress(props.activeRunState, props.activeStatus)}`}
         {props.scrollOffset > 0 ? `  scrolled ${props.scrollOffset} above latest` : ""}
       </Text>
       <Text dimColor>
@@ -64,4 +66,23 @@ export function FooterBar(props: FooterBarProps) {
       </Text>
     </Box>
   );
+}
+
+function formatActiveProgress(
+  activeRunState: ActiveRunState | undefined,
+  fallback: string,
+): string {
+  if (!activeRunState) return fallback;
+
+  const parts = [activeRunState.command, activeRunState.agentId, activeRunState.phase].filter(
+    Boolean,
+  );
+  if (activeRunState.step && activeRunState.maxSteps) {
+    parts.push(`step ${activeRunState.step}/${activeRunState.maxSteps}`);
+  }
+  if (activeRunState.detail) {
+    parts.push(activeRunState.detail);
+  }
+
+  return parts.join("  ");
 }

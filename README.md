@@ -87,7 +87,7 @@ Custom OpenAI-compatible endpoints can use `provider: "custom"` with an explicit
 }
 ```
 
-Plain-language agent prompts can use configured API-key providers or the built-in OpenAI Codex OAuth model catalog. The user-facing slash surface focuses on workflow commands such as `/model`, `/agent`, `/sessions`, `/verify`, and `/summary`; file reads, search, LSP, web fetch/search, shell, and patch application run as agent tools.
+Plain-language agent prompts can use configured API-key providers or the built-in OpenAI Codex OAuth model catalog. The user-facing slash surface combines global commands such as `/model`, `/agent`, `/sessions`, and `/summary` with commands exposed by the active agent. File reads, search, LSP, web fetch/search, shell, and patch application run as agent tools.
 
 The single-engine agent loop uses `agent.maxIterations` as a step budget. When it reaches the final step, tools are disabled and the model is asked to provide a final answer from the observations gathered so far instead of stopping with a hard error.
 
@@ -188,7 +188,11 @@ Inside the TUI:
 /model status
 /agent
 /plan
+/validate
 /build
+/test core
+/harness
+/done
 /queue
 /clear_queue
 /steer Use focused tests first
@@ -208,15 +212,22 @@ Notes:
 
 - Plain text input runs a single-engine agent turn that can read/search files, run verification, and propose patches.
 - The startup screen shows the active agent/model/session, key shortcuts, and quick paths for `/model`, `/agent`, and `/sessions`.
+- The footer shows active run progress such as command, agent, phase, current model step, and current tool or verification command.
 - The transcript is a bounded viewport with tail-follow behavior, PageUp/PageDown scrolling, `j`/`k` message selection, and Enter/Space expansion for collapsible messages.
 - `/mode` shows the current MAGI mode, active agent, selected model provider, and session.
 - `/auth` manages OpenAI OAuth credentials for built-in Codex-style OpenAI model providers.
 - `/model` opens a selector when run without arguments; `/model status`, `/model reset`, and `/model <provider-id>` remain available.
 - `/agent` opens a selector when run without arguments; `/agent <agent-id>` switches directly.
-- `/plan` switches to the read-only planning agent. The plan agent can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
-- `/build` switches back to the default build agent.
+- `/help` includes the active agent's command surface first, followed by global commands.
+- `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, and `/done` are active-agent commands, not global workflow stages. Unsupported commands explain what the current agent allows.
+- The plan agent exposes `/plan`, `/validate`, and `/done`. It can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
+- The build agent exposes `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, and `/done`.
 - `/queue`, `/clear_queue`, `/steer`, and `/interrupt` control active or queued agent runs.
-- `/verify` runs configured verification commands.
+- `/validate` asks the active agent to sanity-check the current plan or implementation.
+- `/verify` runs configured verification commands, or one explicit command when provided.
+- `/test [core|tui|config|harness|all]` runs a known focused test target.
+- `/harness` is reserved for future product/scenario harness suites and currently reports that no suite is configured.
+- `/done` is a checkpoint: plan mode reports the plan file and next step, build mode summarizes the session.
 - `/revise` asks the active agent to revise from recent verification failures.
 - `/summary` reports changed files, verification results, and residual risk.
 - File reads, search, LSP, web fetch/search, shell, and patch application are agent tools rather than user-facing slash commands; ask the agent in plain language to use them.

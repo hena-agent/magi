@@ -15,6 +15,7 @@ import {
   createToolCall,
   createToolSettlement,
   extractFirstDiffBlock,
+  getAgentCommand,
   getAuth,
   getAgent,
   getDefaultModelSelection,
@@ -22,10 +23,11 @@ import {
   getEffectiveModelProviderSummaries,
   getLatestProposedPatch,
   getLatestModelSelection,
+  getToolPermission,
+  listAgentCommands,
+  listAgents,
   listEffectiveModelProviders,
   loadModelsDevCatalog,
-  getToolPermission,
-  listAgents,
   loginOpenAICodexBrowser,
   loginOpenAICodexHeadless,
   MAGI_BUILD_SWITCH_REMINDER,
@@ -39,6 +41,7 @@ import {
   selectMagiEngineCandidates,
   selectReviewLenses,
   summarizeWorkspace,
+  type AgentCommandInfo,
   type ExecutableAgentAction,
   type AgentTurnEvent,
   type AgentInfo,
@@ -77,6 +80,15 @@ export type DisplayMessage = {
     summary?: string;
     preview?: string;
   };
+};
+
+export type ActiveRunState = {
+  agentId: string;
+  command: string;
+  phase: string;
+  step?: number;
+  maxSteps?: number;
+  detail?: string;
 };
 
 export type PendingPermission = {
@@ -137,6 +149,15 @@ export type SlashCommandInfo = {
   hidden?: boolean;
 };
 
+function agentCommandToSlashCommand(command: AgentCommandInfo): SlashCommandInfo {
+  return {
+    name: command.id,
+    usage: command.usage,
+    description: command.description,
+    category: "Current Agent",
+  };
+}
+
 const slashCommands: SlashCommandInfo[] = [
   {
     name: "model",
@@ -162,18 +183,6 @@ const slashCommands: SlashCommandInfo[] = [
     description: "List or switch agents",
     category: "Agent",
   },
-  {
-    name: "plan",
-    usage: "/plan [prompt]",
-    description: "Switch to plan agent, optionally run prompt",
-    category: "Agent",
-  },
-  {
-    name: "build",
-    usage: "/build [prompt]",
-    description: "Switch to build agent, optionally run prompt",
-    category: "Agent",
-  },
   { name: "queue", usage: "/queue", description: "Show queued prompts", category: "Workflow" },
   {
     name: "clear_queue",
@@ -191,12 +200,6 @@ const slashCommands: SlashCommandInfo[] = [
     name: "interrupt",
     usage: "/interrupt",
     description: "Stop the current run at the next safe point",
-    category: "Workflow",
-  },
-  {
-    name: "verify",
-    usage: "/verify [command]",
-    description: "Run verification command",
     category: "Workflow",
   },
   {
@@ -344,17 +347,20 @@ const slashCommands: SlashCommandInfo[] = [
 ];
 const visibleSlashCommands = slashCommands.filter((command) => command.hidden !== true);
 
-function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
+function getSlashCommandSuggestions(
+  input: string,
+  commands: SlashCommandInfo[],
+): SlashCommandInfo[] {
   if (!input.startsWith("/")) {
     return [];
   }
 
   const rawQuery = input.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   if (rawQuery.length === 0) {
-    return visibleSlashCommands.slice(0, 8);
+    return commands.slice(0, 8);
   }
 
-  return visibleSlashCommands
+  return commands
     .filter((command) => {
       const names = [command.name, ...(command.aliases ?? [])];
       return names.some((name) => name.toLowerCase().startsWith(rawQuery));
@@ -363,7 +369,15 @@ function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
 }
 
 function formatSlashCommandHelp(commands: SlashCommandInfo[]): string {
-  const categories = ["Session", "Model/Auth", "Agent", "Workflow", "MAGI", "Tools"];
+  const categories = [
+    "Current Agent",
+    "Session",
+    "Model/Auth",
+    "Agent",
+    "Workflow",
+    "MAGI",
+    "Tools",
+  ];
   const lines = ["Commands:"];
 
   for (const category of categories) {
@@ -392,6 +406,7 @@ type QueuedPrompt = {
   providerId: string;
   agent: AgentInfo;
   queuedAt: string;
+  runState?: Pick<ActiveRunState, "command" | "phase">;
 };
 
 export function AppController() {
@@ -433,6 +448,7 @@ export function AppController() {
   const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(() => new Set());
   const [activeStatus, setActiveStatus] = useState("Ready");
+  const [activeRunState, setActiveRunState] = useState<ActiveRunState>();
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
   const [pendingSelector, setPendingSelector] = useState<PendingSelector>();
@@ -446,10 +462,14 @@ export function AppController() {
   );
   const [busyDepth, setBusyDepth] = useState(0);
   const isBusy = busyDepth > 0;
+  const activeAgentSlashCommands = listAgentCommands(activeAgent.id).map(
+    agentCommandToSlashCommand,
+  );
+  const availableSlashCommands = [...activeAgentSlashCommands, ...visibleSlashCommands];
   const slashCommandSuggestions =
     pendingPermission || pendingQuestion || pendingSelector
       ? []
-      : getSlashCommandSuggestions(prompt);
+      : getSlashCommandSuggestions(prompt, availableSlashCommands);
 
   useEffect(() => {
     setPromptCursor((cursor) => Math.min(cursor, prompt.length));
@@ -913,25 +933,12 @@ export function AppController() {
     const [command = "", ...args] = content.slice(1).split(" ");
 
     if (command === "help") {
-      addMessage(formatSlashCommandHelp(visibleSlashCommands));
+      addMessage(formatSlashCommandHelp(availableSlashCommands));
       return;
     }
 
     if (command === "mode") {
       showModeStatus();
-      return;
-    }
-
-    if (command === "verify") {
-      if (
-        !requirePersistedSession(
-          "Run a normal prompt first, or /resume an existing session, before running /verify.",
-        )
-      ) {
-        return;
-      }
-
-      await runVerification(args.join(" ").trim());
       return;
     }
 
@@ -1014,16 +1021,6 @@ export function AppController() {
       return;
     }
 
-    if (command === "plan") {
-      await switchAgentAndMaybeRun("plan", args.join(" ").trim());
-      return;
-    }
-
-    if (command === "build") {
-      await switchAgentAndMaybeRun("build", args.join(" ").trim());
-      return;
-    }
-
     if (command === "queue") {
       showQueuedPrompts();
       return;
@@ -1075,13 +1072,179 @@ export function AppController() {
       return;
     }
 
+    const agentCommand = getAgentCommand(activeAgent.id, command);
+    if (agentCommand) {
+      await executeAgentScopedCommand(agentCommand, args.join(" ").trim());
+      return;
+    }
+
+    if (isKnownAgentCommand(command)) {
+      addMessage(
+        `${activeAgent.id} agent does not support /${command}. Available agent commands: ${formatAllowedAgentCommands(activeAgent.id)}`,
+      );
+      return;
+    }
+
     addMessage(`Unknown command: /${command}. Type /help for available commands.`);
+  }
+
+  async function executeAgentScopedCommand(
+    command: AgentCommandInfo,
+    input: string,
+  ): Promise<void> {
+    switch (command.id) {
+      case "plan":
+        await switchAgentAndMaybeRun("plan", input);
+        return;
+      case "build":
+        await switchAgentAndMaybeRun("build", input);
+        return;
+      case "validate":
+        await runAgentValidation(input);
+        return;
+      case "verify":
+        if (
+          !requirePersistedSession(
+            "Run a normal prompt first, or /resume an existing session, before running /verify.",
+          )
+        ) {
+          return;
+        }
+        await runVerification(input, activeAgent, { command: "/verify", phase: "verifying" });
+        return;
+      case "test": {
+        if (
+          !requirePersistedSession(
+            "Run a normal prompt first, or /resume an existing session, before running /test.",
+          )
+        ) {
+          return;
+        }
+        const testCommand = getFocusedTestCommand(input);
+        if (!testCommand) {
+          addMessage("Usage: /test [core|tui|config|harness|all]");
+          return;
+        }
+        await runVerification(testCommand, activeAgent, { command: "/test", phase: "testing" });
+        return;
+      }
+      case "harness":
+        addMessage(
+          input.length > 0
+            ? `Harness suite not configured yet: ${input}`
+            : "Harness suites are not configured yet.",
+        );
+        return;
+      case "done":
+        await showAgentDoneCheckpoint();
+        return;
+    }
+  }
+
+  async function runAgentValidation(focus: string): Promise<void> {
+    const prompt = [
+      activeAgent.id === "plan"
+        ? "Validate the current plan for completeness, missing requirements, risky assumptions, and readiness to hand off to build. Do not edit files."
+        : "Validate the current implementation against the user's request, current plan, changed files, and known risks. Do not make new edits unless the validation identifies a concrete required fix.",
+      focus.length > 0 ? `Focus: ${focus}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (isBusy) {
+      queuePromptForAgent(prompt, activeAgent, activeProviderId, "/validate");
+      return;
+    }
+
+    await submitAgentPrompt(prompt, activeAgent, activeProviderId, {
+      command: "/validate",
+      phase: "validating",
+    });
+  }
+
+  async function showAgentDoneCheckpoint(): Promise<void> {
+    if (activeAgent.id === "plan") {
+      addMessage(
+        [
+          "Plan checkpoint:",
+          `- plan file: ${getPlanFilePath()}`,
+          "- suggested next: run /validate, then switch to /build when ready.",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    if (!session) {
+      addMessage("Build checkpoint: no saved session yet. Run a normal prompt first.");
+      return;
+    }
+
+    await runSummary();
+  }
+
+  function getFocusedTestCommand(target: string): string | undefined {
+    switch ((target || "all").toLowerCase()) {
+      case "all":
+        return "pnpm test";
+      case "core":
+        return "pnpm --filter @magi/core test";
+      case "tui":
+        return "pnpm --filter @magi/tui test";
+      case "config":
+        return "pnpm --filter @magi/config test";
+      case "harness":
+        return "pnpm --filter @magi/harness test";
+      default:
+        return undefined;
+    }
+  }
+
+  function isKnownAgentCommand(command: string): boolean {
+    return ["plan", "build", "validate", "verify", "test", "harness", "done"].includes(command);
+  }
+
+  function formatAllowedAgentCommands(agentId: string): string {
+    const commands = listAgentCommands(agentId).map((candidate) => candidate.slash);
+    return commands.length > 0 ? commands.join(" ") : "none";
+  }
+
+  function queuePromptForAgent(
+    content: string,
+    agent: AgentInfo,
+    providerId: string | undefined,
+    label: string,
+  ): void {
+    const queuedAt = new Date().toISOString();
+    const queuedPrompt = {
+      content,
+      providerId: providerId ?? "",
+      agent,
+      queuedAt,
+      runState: { command: label, phase: label === "/validate" ? "validating" : "running" },
+    };
+    queuedPromptsRef.current = [...queuedPromptsRef.current, queuedPrompt];
+    appendSessionEvent({
+      type: "queued_user_input",
+      payload: {
+        content,
+        agentId: agent.id,
+        providerId,
+        mode: "queued",
+        command: label,
+        queuedAt,
+      },
+    });
+    addMessage(`Queued ${label} #${queuedPromptsRef.current.length}: ${truncateOneLine(content)}`);
   }
 
   async function submitAgentPrompt(
     content: string,
     agent: AgentInfo,
     providerId: string | undefined,
+    runState: Pick<ActiveRunState, "command" | "phase"> = {
+      command: "prompt",
+      phase: "running",
+    },
   ): Promise<void> {
     const userEvent = appendSessionEvent({
       type: "user_message",
@@ -1089,15 +1252,20 @@ export function AppController() {
     });
     addMessage(`User: ${content}`, `${userEvent.id}-user`);
 
-    await runSingleEngineAgentTurn(content, agent, providerId);
+    await runSingleEngineAgentTurn(content, agent, providerId, runState);
   }
 
   async function runSingleEngineAgentTurn(
     content: string,
     agent: AgentInfo,
     providerId: string | undefined,
+    runState: Pick<ActiveRunState, "command" | "phase"> = {
+      command: "prompt",
+      phase: "running",
+    },
   ): Promise<void> {
     beginBusy();
+    startActiveRun(agent, runState.command, runState.phase);
     interruptionRequestedRef.current = false;
 
     try {
@@ -1152,6 +1320,8 @@ export function AppController() {
       }
       addMessage(`Agent error: ${formatError(error)}`);
     } finally {
+      clearActiveRun();
+      setActiveStatus("Ready");
       endBusy();
       void drainQueuedPrompts();
     }
@@ -1815,7 +1985,9 @@ export function AppController() {
     agent: AgentInfo = activeAgent,
   ): Promise<ToolResult> {
     beginBusy();
-    setActiveStatus(`Running ${formatToolCallSummary(call)}`);
+    const toolSummary = formatToolCallSummary(call);
+    setActiveStatus(`Running ${toolSummary}`);
+    updateActiveRunState({ phase: "tool", detail: toolSummary });
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     appendSessionEvent({ type: "tool_call", payload: call });
@@ -1894,7 +2066,11 @@ export function AppController() {
     }
   }
 
-  async function runVerification(command: string, agent: AgentInfo = activeAgent): Promise<string> {
+  async function runVerification(
+    command: string,
+    agent: AgentInfo = activeAgent,
+    runState?: Pick<ActiveRunState, "command" | "phase">,
+  ): Promise<string> {
     if (mergeAgentPermission(agent, config.permissions).shell === "deny") {
       const message = `${agent.id} agent cannot run verification because shell permission is denied.`;
       addMessage(message);
@@ -1902,8 +2078,15 @@ export function AppController() {
     }
 
     beginBusy();
+    if (runState) {
+      startActiveRun(agent, runState.command, runState.phase);
+    } else {
+      updateActiveRunState({ phase: "verifying", detail: command || "configured commands" });
+    }
 
     try {
+      setActiveStatus(`Running ${command || "configured verification"}`);
+      updateActiveRunState({ detail: command || "configured commands" });
       const results = await runVerificationCommands({
         commands: command.length > 0 ? [command] : config.verificationCommands,
         cwd: config.workspaceRoot,
@@ -1927,6 +2110,10 @@ export function AppController() {
         )
         .join("\n\n");
     } finally {
+      if (runState) {
+        clearActiveRun();
+      }
+      setActiveStatus("Ready");
       endBusy();
     }
   }
@@ -2254,7 +2441,10 @@ export function AppController() {
       return;
     }
 
-    await submitAgentPrompt(content, agent, activeProviderId);
+    await submitAgentPrompt(content, agent, activeProviderId, {
+      command: `/${agentId}`,
+      phase: agentId === "plan" ? "planning" : "building",
+    });
   }
 
   async function handleAuthCommand(args: string[]): Promise<void> {
@@ -2674,7 +2864,12 @@ export function AppController() {
         },
       });
       addMessage(`User: ${nextPrompt.content}`, `${userEvent.id}-user`);
-      await runSingleEngineAgentTurn(nextPrompt.content, nextPrompt.agent, nextPrompt.providerId);
+      await runSingleEngineAgentTurn(
+        nextPrompt.content,
+        nextPrompt.agent,
+        nextPrompt.providerId,
+        nextPrompt.runState,
+      );
     }
   }
 
@@ -2703,18 +2898,33 @@ export function AppController() {
     switch (event.type) {
       case "assistant_started":
         setActiveStatus("Thinking...");
+        updateActiveRunState({ phase: "thinking", detail: undefined });
         return;
       case "provider_error":
         setActiveStatus("Provider error");
+        updateActiveRunState({ phase: "provider_error" });
         return;
       case "agent_step_ended": {
         const payload = event.payload as { status?: unknown };
         setActiveStatus(`Step ${String(payload.status ?? "ended")}`);
+        updateActiveRunState({ phase: String(payload.status ?? "ended"), detail: undefined });
         return;
       }
-      case "agent_step_started":
+      case "agent_step_started": {
+        const payload = event.payload as {
+          iteration?: unknown;
+          maxIterations?: unknown;
+          reason?: unknown;
+        };
         setActiveStatus("Preparing next step...");
+        updateActiveRunState({
+          phase: String(payload.reason ?? "thinking"),
+          step: typeof payload.iteration === "number" ? payload.iteration : undefined,
+          maxSteps: typeof payload.maxIterations === "number" ? payload.maxIterations : undefined,
+          detail: undefined,
+        });
         return;
+      }
     }
   }
 
@@ -2844,6 +3054,20 @@ export function AppController() {
     );
   }
 
+  function startActiveRun(agent: AgentInfo, command: string, phase: string): void {
+    setActiveRunState({ agentId: agent.id, command, phase });
+  }
+
+  function updateActiveRunState(update: Partial<ActiveRunState>): void {
+    setActiveRunState((currentState) =>
+      currentState ? { ...currentState, ...update } : currentState,
+    );
+  }
+
+  function clearActiveRun(): void {
+    setActiveRunState(undefined);
+  }
+
   function beginBusy(): void {
     setBusyDepth((currentDepth) => currentDepth + 1);
   }
@@ -2854,6 +3078,7 @@ export function AppController() {
 
   return (
     <AppView
+      activeRunState={activeRunState}
       activeAgentId={activeAgent.id}
       activeProviderId={activeProviderId}
       canReadInput={canReadInput}

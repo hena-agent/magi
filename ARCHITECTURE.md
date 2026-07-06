@@ -22,6 +22,7 @@
 - Shell runner: executes commands, captures stdout/stderr/exit code, and handles long-running processes.
 - Patch applier: applies controlled file edits and records changed paths.
 - Verification runner: runs configured lint/typecheck/test/build commands when available.
+- Agent command registry: exposes lightweight slash commands by active agent without introducing a global workflow engine.
 - Subagent runner: launches foreground and background subagent tasks using the same agent loop while preventing nested task recursion.
 - LSP adapter: launches `typescript-language-server` on demand for TypeScript/JavaScript document symbols, definitions, references, hover information, and call hierarchy.
 - Websearch adapter: calls Exa and Parallel MCP endpoints plus Brave Search REST, normalizing results into agent-readable text under the existing network permission category.
@@ -47,7 +48,10 @@ See [`AI_LOOP.md`](./AI_LOOP.md) for a more detailed walkthrough of the current 
 - Provider-native tool calls are preferred when the model supports them; JSON action fallback remains available for compatibility.
 - Unknown or malformed native tool calls become explicit `invalid_tool` observations so the model can recover without hiding provider mistakes.
 - Tool execution records pending, running, succeeded, failed, denied, and interrupted settlement states where applicable.
-- The `plan` agent is read-only by default but may write or edit only its exact plan file under `.magi/plans/` during plan-mode workflow.
+- Slash commands are split between global shell commands and active-agent commands. The current plan/build surface is intentionally small: plan exposes `/plan`, `/validate`, and `/done`; build exposes `/plan`, `/build`, `/validate`, `/verify`, `/test`, `/harness`, and `/done`.
+- `/validate` is model-driven sanity checking for the active agent; `/verify` is deterministic command execution for build-oriented work.
+- `/done` is a checkpoint or summary command, not a central state transition.
+- The `plan` agent is read-only by default but may write or edit only its exact plan file under `.magi/plans/` during plan-mode work.
 - The `task` tool supports foreground subagents for blocking research/work and background subagents for independent work that records `task_update` events.
 - Background tasks require a saved session, write events to the session where they started, and deny prompt-gated permissions rather than blocking on interactive approval.
 

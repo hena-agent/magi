@@ -1,6 +1,7 @@
 import { Box } from "ink";
 import type {
   DisplayMessage,
+  ActiveRunState,
   PendingPermission,
   PendingQuestion,
   PendingSelector,
@@ -13,6 +14,7 @@ import { FooterBar, StatusBar } from "./status-bar.js";
 import { TranscriptView } from "./transcript-view.js";
 
 type AppViewProps = {
+  activeRunState: ActiveRunState | undefined;
   activeStatus: string;
   activeAgentId: string;
   activeProviderId: string | undefined;
@@ -82,6 +84,7 @@ export function AppView(props: AppViewProps) {
         }
       />
       <FooterBar
+        activeRunState={props.activeRunState}
         activeStatus={props.activeStatus}
         canReadInput={props.canReadInput}
         isBusy={props.isBusy}
