@@ -47,10 +47,13 @@ export function AppView(props: AppViewProps) {
     <Box flexDirection="column" gap={1}>
       <StatusBar {...props} />
       <TranscriptView
+        activeAgentId={props.activeAgentId}
+        activeModelId={props.activeProviderId ?? props.effectiveModelProviderId ?? "none"}
         messages={props.messages}
         scrollOffset={props.transcriptScrollOffset}
         selectedMessageId={props.selectedMessageId}
         expandedMessageIds={props.expandedMessageIds}
+        workspaceRoot={props.workspaceRoot}
       />
       <OverlayArea
         pendingPermission={props.pendingPermission}

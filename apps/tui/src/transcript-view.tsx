@@ -14,11 +14,18 @@ type TranscriptLine = {
 };
 
 export function TranscriptView(props: {
+  activeAgentId: string;
+  activeModelId: string;
   messages: DisplayMessage[];
   scrollOffset: number;
   selectedMessageId: string | undefined;
   expandedMessageIds: Set<string>;
+  workspaceRoot: string;
 }) {
+  const showDashboard =
+    props.scrollOffset === 0 &&
+    props.messages.length <= 1 &&
+    props.messages.every((message) => message.id === "session-start");
   const lines = props.messages.flatMap((message) =>
     formatMessageLines({
       message,
@@ -47,7 +54,14 @@ export function TranscriptView(props: {
             .join(" · ")}
         </Text>
       </Box>
-      {visibleLines.length === 0 ? <Text dimColor>No messages yet.</Text> : null}
+      {showDashboard ? (
+        <StartDashboard
+          activeAgentId={props.activeAgentId}
+          activeModelId={props.activeModelId}
+          workspaceRoot={props.workspaceRoot}
+        />
+      ) : null}
+      {visibleLines.length === 0 && !showDashboard ? <Text dimColor>No messages yet.</Text> : null}
       {visibleLines.map((line) => (
         <Text
           key={line.key}
@@ -59,6 +73,52 @@ export function TranscriptView(props: {
           {line.selected ? ` ${line.text}` : line.text}
         </Text>
       ))}
+    </Box>
+  );
+}
+
+function StartDashboard(props: {
+  activeAgentId: string;
+  activeModelId: string;
+  workspaceRoot: string;
+}) {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color="cyan" bold>
+        Ready to work in this repo
+      </Text>
+      <Text dimColor>{props.workspaceRoot}</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>
+          <Text color="green" bold>
+            Start:
+          </Text>{" "}
+          type a task and press Enter
+        </Text>
+        <Text>
+          <Text color="cyan" bold>
+            Switch model:
+          </Text>{" "}
+          /model
+        </Text>
+        <Text>
+          <Text color="cyan" bold>
+            Switch agent:
+          </Text>{" "}
+          /agent
+        </Text>
+        <Text>
+          <Text color="cyan" bold>
+            Resume work:
+          </Text>{" "}
+          /sessions
+        </Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text color="yellow">Current lane</Text>
+        <Text>{`agent ${props.activeAgentId}  model ${props.activeModelId}`}</Text>
+      </Box>
+      <Text dimColor>Transcript keys: PageUp/PageDown scroll, j/k select, Enter expand.</Text>
     </Box>
   );
 }

@@ -20,12 +20,16 @@ export function StatusBar(props: StatusBarProps) {
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Box justifyContent="space-between">
         <Text color="cyan" bold>
-          MAGI
+          MAGI CODING ASSISTANT
         </Text>
-        <Text color={props.isBusy ? "yellow" : "green"}>{props.isBusy ? "running" : "ready"}</Text>
+        <Text color={props.isBusy ? "yellow" : "green"} bold>
+          {props.isBusy ? "RUNNING" : "READY"}
+        </Text>
       </Box>
-      <Text dimColor>
-        {`agent ${props.activeAgentId}  model ${model}  session ${session}  risk ${props.riskLevel}  todos ${props.todoOpenCount}`}
+      <Text>
+        <Text color="green">agent</Text> {props.activeAgentId} <Text color="green">model</Text>{" "}
+        {model} <Text color="green">session</Text> {session} <Text color="green">risk</Text>{" "}
+        {props.riskLevel} <Text color="green">todos</Text> {props.todoOpenCount}
       </Text>
       <Text dimColor>
         {props.planFilePath ? `plan ${props.planFilePath}` : props.workspaceRoot}
@@ -48,10 +52,16 @@ export function FooterBar(props: FooterBarProps) {
   }
 
   return (
-    <Text dimColor>
-      {`${props.isBusy ? "running" : "ready"}  queued ${props.queuedPromptCount}  /help commands  ↑ history  tab complete  ctrl+c exit`}
-      {`  ${props.activeStatus}`}
-      {props.scrollOffset > 0 ? `  scrolled ${props.scrollOffset} above latest` : ""}
-    </Text>
+    <Box flexDirection="column">
+      <Text>
+        <Text color={props.isBusy ? "yellow" : "green"}>{props.isBusy ? "running" : "ready"}</Text>
+        {`  queued ${props.queuedPromptCount}  ${props.activeStatus}`}
+        {props.scrollOffset > 0 ? `  scrolled ${props.scrollOffset} above latest` : ""}
+      </Text>
+      <Text dimColor>
+        Shortcuts: /model switch model /agent switch agent /sessions resume /help commands ctrl+c
+        exit
+      </Text>
+    </Box>
   );
 }

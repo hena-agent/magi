@@ -9,7 +9,7 @@
   "scripts": {
     "build": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json",
     "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
-    "start": "pnpm --filter @magi/core build && node dist/index.js",
+    "start": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json && node dist/index.js",
     "start:tsx": "pnpm --filter @magi/core build && tsx src/index.tsx",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --project tsconfig.json --noEmit"

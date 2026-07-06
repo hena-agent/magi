@@ -33,21 +33,24 @@ export function OverlayArea(props: {
 
 function SelectorOverlay(props: { selector: PendingSelector }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Box flexDirection="column" borderStyle="double" borderColor="cyan" paddingX={1}>
       <Text color="cyan" bold>
-        {props.selector.title}
+        {` ${props.selector.title} `}
       </Text>
       {props.selector.subtitle ? <Text dimColor>{props.selector.subtitle}</Text> : null}
       {props.selector.items.map((item, index) => {
         const selected = index === props.selector.selectedIndex;
         return (
-          <Text
-            key={item.value}
-            color={selected ? "black" : undefined}
-            backgroundColor={selected ? "cyan" : undefined}
-          >
-            {`${selected ? "›" : " "} ${item.label}${item.description ? `  ${item.description}` : ""}`}
-          </Text>
+          <Box key={item.value} flexDirection="column" marginTop={index === 0 ? 1 : 0}>
+            <Text
+              color={selected ? "black" : "white"}
+              backgroundColor={selected ? "cyan" : undefined}
+              bold={selected}
+            >
+              {`${selected ? "›" : " "} ${item.label}`}
+            </Text>
+            {item.description ? <Text dimColor>{`  ${item.description}`}</Text> : null}
+          </Box>
         );
       })}
       <Text dimColor>↑/↓ select enter confirm esc cancel</Text>
