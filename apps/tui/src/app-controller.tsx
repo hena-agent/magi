@@ -149,6 +149,11 @@ const slashCommands: SlashCommandInfo[] = [
   { name: "glob", usage: "/glob <pattern>", description: "List files matching a glob" },
   { name: "grep", usage: "/grep <pattern> [include]", description: "Search workspace files" },
   { name: "webfetch", usage: "/webfetch <url> [format]", description: "Fetch web content" },
+  {
+    name: "websearch",
+    usage: "/websearch [provider] <query>",
+    description: "Search the web with Exa, Parallel, or Brave",
+  },
   { name: "todowrite", usage: "/todowrite <json>", description: "Update session todo list" },
   { name: "question", usage: "/question <json>", description: "Ask structured questions" },
   { name: "skill", usage: "/skill <name>", description: "Load a named skill" },
@@ -727,6 +732,20 @@ export function AppController() {
           }),
           agent,
         );
+      case "websearch":
+        return await executeToolAction(
+          createToolCall("websearch", {
+            query: action.query,
+            ...(action.providerId === undefined ? {} : { providerId: action.providerId }),
+            ...(action.limit === undefined ? {} : { limit: action.limit }),
+            ...(action.searchType === undefined ? {} : { type: action.searchType }),
+            ...(action.livecrawl === undefined ? {} : { livecrawl: action.livecrawl }),
+            ...(action.contextMaxCharacters === undefined
+              ? {}
+              : { contextMaxCharacters: action.contextMaxCharacters }),
+          }),
+          agent,
+        );
       case "todowrite":
         return await executeToolAction(createToolCall("todowrite", { todos: action.todos }), agent);
       case "question":
@@ -1054,6 +1073,17 @@ export function AppController() {
           url: action.url,
           ...(action.format === undefined ? {} : { format: action.format }),
           ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
+        });
+      case "websearch":
+        return createToolCall("websearch", {
+          query: action.query,
+          ...(action.providerId === undefined ? {} : { providerId: action.providerId }),
+          ...(action.limit === undefined ? {} : { limit: action.limit }),
+          ...(action.searchType === undefined ? {} : { type: action.searchType }),
+          ...(action.livecrawl === undefined ? {} : { livecrawl: action.livecrawl }),
+          ...(action.contextMaxCharacters === undefined
+            ? {}
+            : { contextMaxCharacters: action.contextMaxCharacters }),
         });
       case "todowrite":
         return createToolCall("todowrite", { todos: action.todos });
@@ -2222,6 +2252,17 @@ function parseToolCommand(command: string, rawArgs: string): ToolCall | undefine
         ...(format === undefined ? {} : { format }),
       });
     }
+    case "websearch": {
+      const trimmed = rawArgs.trim();
+      const [first = "", ...rest] = trimmed.split(/\s+/);
+      const providerId = isWebsearchProvider(first) ? first : undefined;
+      const query = providerId ? rest.join(" ") : trimmed;
+
+      return createToolCall(command, {
+        query,
+        ...(providerId === undefined ? {} : { providerId }),
+      });
+    }
     case "todowrite":
       return createToolCall(command, { todos: JSON.parse(rawArgs) as unknown });
     case "question":
@@ -2507,6 +2548,7 @@ function isToolName(value: string): value is ToolName {
     value === "bash" ||
     value === "apply_patch" ||
     value === "webfetch" ||
+    value === "websearch" ||
     value === "todowrite" ||
     value === "question" ||
     value === "skill" ||
@@ -2515,6 +2557,10 @@ function isToolName(value: string): value is ToolName {
     value === "lsp_references" ||
     value === "lsp_hover"
   );
+}
+
+function isWebsearchProvider(value: string): value is "exa" | "parallel" | "brave" {
+  return value === "exa" || value === "parallel" || value === "brave";
 }
 
 function truncate(value: string): string {
@@ -2557,6 +2603,10 @@ function formatToolResultMessage(result: ToolResult, input: unknown): string {
     case "webfetch": {
       const url = readInputString(input, "url") ?? "url";
       return `webfetch: ${url}\n${truncate(output)}`;
+    }
+    case "websearch": {
+      const query = readInputString(input, "query") ?? "query";
+      return `websearch: ${query}\n${truncate(output)}`;
     }
     case "todowrite":
       return `todowrite: ${formatOutputSummary(result.output)}`;
