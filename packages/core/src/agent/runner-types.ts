@@ -21,6 +21,8 @@ export type AgentRunEvent =
       payload: {
         runId: string;
         stepId: string;
+        iteration?: number;
+        maxIterations?: number;
         reason: "user_input" | "tool_result" | "queued_input" | "final_response";
       };
     }

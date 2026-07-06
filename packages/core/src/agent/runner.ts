@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/noExcessiveLinesPerFile: Keep the compact event-driven runner in one file for now.
 import type { PrimaryModelAdapter } from "../model.js";
 import type { AgentAction, ExecutableAgentAction } from "./actions.js";
 import { validateAgentAction } from "./actions.js";
@@ -78,7 +79,7 @@ async function runAgentIteration(
   }
 
   const isLastStep = iteration >= maxIterations;
-  const stepId = startStep(input, state, isLastStep);
+  const stepId = startStep(input, state, isLastStep, iteration, maxIterations);
   const action = await generateActionOrEmitFailure(
     input,
     state.runId,
@@ -103,14 +104,23 @@ async function runAgentIteration(
   return undefined;
 }
 
-function startStep(input: RunInput, state: RunState, isLastStep: boolean): string {
+function startStep(
+  input: RunInput,
+  state: RunState,
+  isLastStep: boolean,
+  iteration: number,
+  maxIterations: number,
+): string {
   const stepId = crypto.randomUUID();
   const reason = isLastStep
     ? "final_response"
     : state.observations.length === 0
       ? "user_input"
       : "tool_result";
-  input.onEvent?.({ type: "agent_step_started", payload: { runId: state.runId, stepId, reason } });
+  input.onEvent?.({
+    type: "agent_step_started",
+    payload: { runId: state.runId, stepId, iteration, maxIterations, reason },
+  });
   input.onEvent?.({ type: "assistant_started", payload: { runId: state.runId, stepId } });
 
   return stepId;

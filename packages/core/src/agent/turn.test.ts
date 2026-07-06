@@ -102,3 +102,37 @@ it("emits lifecycle and provider error events", async () => {
     "agent_step_ended",
   ]);
 });
+
+it("emits step progress metadata", async () => {
+  const steps: Array<{ iteration?: number; maxIterations?: number }> = [];
+  const responses = [
+    JSON.stringify({ type: "read", path: "README.md" }),
+    JSON.stringify({ type: "finish", summary: "done" }),
+  ];
+
+  await runAgentTurn({
+    engine: {
+      async generateText() {
+        return { text: responses.shift() ?? JSON.stringify({ type: "finish", summary: "done" }) };
+      },
+    },
+    userMessage: "Read",
+    maxIterations: 4,
+    onEvent(event) {
+      if (event.type === "agent_step_started") {
+        steps.push({
+          iteration: event.payload.iteration,
+          maxIterations: event.payload.maxIterations,
+        });
+      }
+    },
+    async executeAction() {
+      return "contents";
+    },
+  });
+
+  expect(steps).toEqual([
+    { iteration: 1, maxIterations: 4 },
+    { iteration: 2, maxIterations: 4 },
+  ]);
+});
