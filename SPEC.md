@@ -31,7 +31,7 @@
 - Shell command execution with permission checks.
 - Network fetch through explicit permission-gated `webfetch` with response metadata and truncation.
 - Web search through explicit permission-gated `websearch` with Exa, Parallel, and Brave providers.
-- TypeScript/JavaScript repo awareness through LSP document symbols, definitions, references, and hover tools.
+- TypeScript/JavaScript repo awareness through LSP document symbols, definitions, references, hover, and call hierarchy tools.
 - OpenCode-style planning helpers: persisted todos, interactive questions, skill loading, foreground/background subagents, and plan/build agent workflow.
 - Git-aware workflow that can inspect status/diff/log without destructive defaults.
 - Normal coding loop: plan, edit, run tools, observe failures, revise, summarize.

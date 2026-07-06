@@ -23,7 +23,7 @@
 - Patch applier: applies controlled file edits and records changed paths.
 - Verification runner: runs configured lint/typecheck/test/build commands when available.
 - Subagent runner: launches foreground and background subagent tasks using the same agent loop while preventing nested task recursion.
-- LSP adapter: launches `typescript-language-server` on demand for TypeScript/JavaScript document symbols, definitions, references, and hover information.
+- LSP adapter: launches `typescript-language-server` on demand for TypeScript/JavaScript document symbols, definitions, references, hover information, and call hierarchy.
 - Websearch adapter: calls Exa and Parallel MCP endpoints plus Brave Search REST, normalizing results into agent-readable text under the existing network permission category.
 - Sandbox runner: runs risky verification in an isolated environment when available.
 - Model adapter layer: uses Vercel AI SDK for provider calls, streaming, structured outputs, and tool-capable model interactions.

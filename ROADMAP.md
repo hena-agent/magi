@@ -7,8 +7,8 @@
 
 ## Current Focus
 - [x] Finish bootstrap self-hosting through Phase 3 MAGI core and Phase 3.5 session/runner parity basics.
-- [~] Finish remaining Phase 3.5 OpenCode-style tool parity before moving deeper into Phase 4 multi-engine support.
-- [ ] Next recommended implementation target: LSP call hierarchy or Phase 3.5 session/continuation test hardening.
+- [x] Finish remaining Phase 3.5 OpenCode-style tool parity before moving deeper into Phase 4 multi-engine support.
+- [ ] Next recommended implementation target: start Phase 4 model adapter work, or design sandbox/permission boundaries before plugin/custom tool registry.
 
 ## Phase 0: Project Skeleton
 - [x] Initialize pnpm workspace.
@@ -71,7 +71,7 @@
 - [x] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
 - [x] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
 - [x] Add queued and steering input handling while an agent run is active.
-- [~] Add OpenCode-style tool parity in the real agent loop, not only as slash commands.
+- [x] Add OpenCode-style tool parity in the real agent loop, not only as slash commands.
   - [x] Add core/native/JSON/TUI loop support for `webfetch`, `todowrite`, and `question`.
   - [x] Upgrade `question` from output-only prompts to interactive TUI question answering with tool-result continuation.
   - [x] Upgrade `todowrite` from output-only updates to persisted session todo state and resume display.
@@ -81,12 +81,16 @@
   - [x] Add background `task` execution after foreground subagent behavior is stable.
   - [x] Add `plan_exit` plus OpenCode `plan-mode.txt` workflow, plan file path management, and plan-file-only write exceptions.
   - [x] Add LSP tool support for TypeScript/JavaScript document symbols, definitions, references, and hover.
-  - [ ] Add LSP call hierarchy after the first LSP tool pass is stable.
+  - [x] Add LSP call hierarchy after the first LSP tool pass is stable.
   - [x] Add `websearch` with Exa, Parallel, and Brave provider selection, API key handling, and network permission prompts.
   - [x] Add internal invalid-tool handling for malformed provider tool calls.
-  - [ ] Add plugin/custom tool registry only after sandbox and permission boundaries are designed.
-- [~] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
+  - [x] Defer plugin/custom tool registry until sandbox and permission boundaries are designed.
+- [x] Add tests that cover draft session persistence, continuation conditions, max-step final response, and context compaction behavior.
   - [x] Add focused tests for native task background flag parsing.
+  - [x] Add focused tests for continuation queued input, stale queued input, and settled-tool completion.
+  - [x] Add focused tests for max-step final text-only response behavior.
+  - [x] Add focused tests for resumed context including todos, task updates, and plan exits.
+  - [x] Add TUI-level coverage for draft session persistence.
 
 ## Phase 4: Multi-Engine Support
 - [ ] Implement model adapter interface.
