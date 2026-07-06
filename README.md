@@ -1,8 +1,8 @@
 # MAGI
 
-MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell that can read files, search code, edit through controlled tools, run verification commands, use provider-native tool calls, persist session history, launch subagents, revise from failures, and summarize changes.
+MAGI is a local coding-agent CLI/TUI prototype. The current milestone is a self-hosting assistant shell with a usable Ink-based daily-driver interface: it can read files, search code, edit through controlled tools, run verification commands, use provider-native tool calls, persist session history, launch subagents, revise from failures, and summarize changes.
 
-MAGI consensus and multi-engine review are intentionally not part of the current bootstrap loop yet. See `ROADMAP.md` for planned phases.
+MAGI consensus and multi-engine review foundations are partially implemented, but the normal coding path is still the default bootstrap loop. See `ROADMAP.md` for the remaining MAGI trigger, sandbox, review, and voting work.
 
 ## Requirements
 
@@ -87,7 +87,7 @@ Custom OpenAI-compatible endpoints can use `provider: "custom"` with an explicit
 }
 ```
 
-Plain-language agent prompts can use configured API-key providers or the built-in OpenAI Codex OAuth model catalog. Slash commands such as `/read`, `/glob`, `/grep`, `/verify`, and `/summary` can be useful without an API key.
+Plain-language agent prompts can use configured API-key providers or the built-in OpenAI Codex OAuth model catalog. The user-facing slash surface focuses on workflow commands such as `/model`, `/agent`, `/sessions`, `/verify`, and `/summary`; file reads, search, LSP, web fetch/search, shell, and patch application run as agent tools.
 
 The single-engine agent loop uses `agent.maxIterations` as a step budget. When it reaches the final step, tools are disabled and the model is asked to provide a final answer from the observations gathered so far instead of stopping with a hard error.
 
@@ -207,10 +207,12 @@ Inside the TUI:
 Notes:
 
 - Plain text input runs a single-engine agent turn that can read/search files, run verification, and propose patches.
+- The startup screen shows the active agent/model/session, key shortcuts, and quick paths for `/model`, `/agent`, and `/sessions`.
+- The transcript is a bounded viewport with tail-follow behavior, PageUp/PageDown scrolling, `j`/`k` message selection, and Enter/Space expansion for collapsible messages.
 - `/mode` shows the current MAGI mode, active agent, selected model provider, and session.
 - `/auth` manages OpenAI OAuth credentials for built-in Codex-style OpenAI model providers.
-- `/model` lists, switches, resets, and reports effective model providers from config plus built-ins.
-- `/agent` lists and switches built-in agents.
+- `/model` opens a selector when run without arguments; `/model status`, `/model reset`, and `/model <provider-id>` remain available.
+- `/agent` opens a selector when run without arguments; `/agent <agent-id>` switches directly.
 - `/plan` switches to the read-only planning agent. The plan agent can write only its session plan file under `.magi/plans/` and can call `plan_exit` to ask whether to switch back to build mode.
 - `/build` switches back to the default build agent.
 - `/queue`, `/clear_queue`, `/steer`, and `/interrupt` control active or queued agent runs.
@@ -218,10 +220,12 @@ Notes:
 - `/revise` asks the active agent to revise from recent verification failures.
 - `/summary` reports changed files, verification results, and residual risk.
 - File reads, search, LSP, web fetch/search, shell, and patch application are agent tools rather than user-facing slash commands; ask the agent in plain language to use them.
+- Tool results render as concise cards with status, target paths, duration, output summaries, short collapsed previews, and expandable full detail for long output.
+- Interactive `question` tool prompts support arrow-key option selection, Space marking, Enter submit, custom typed answers, and multi-select display.
 - The agent loop supports provider-native tool calls and JSON fallback actions. Malformed native tool calls are converted into `invalid_tool` observations rather than being silently ignored.
 - The `task` tool can launch foreground `general` and `explore` subagents. It can also launch background tasks with `background: true`; background tasks write `task_update` events and deny prompt-gated permissions instead of blocking on user input.
 - MAGI starts in a draft session by default and saves it only after the first successful normal prompt.
-- `/sessions` lists meaningful saved sessions with display titles, event counts, and IDs; `/sessions all` includes empty and command-only legacy sessions.
+- `/sessions` opens a selector for meaningful saved sessions; `/sessions all` includes empty and command-only legacy sessions.
 - `/resume <id-or-number>` switches sessions, and `/new` resets to a fresh draft session.
 - `/rename <title>` updates the current session title and `/history [limit]` shows recent raw session events.
 
@@ -246,4 +250,4 @@ The database is ignored by git. It contains sessions and append-only session eve
 
 ## Current Status
 
-Phase 0 through Phase 3 are complete. Phase 3.5 runner/session/tool parity is complete for the current bootstrap scope: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `websearch`, `skill`, foreground/background `task`, invalid-tool handling, and TypeScript/JavaScript LSP tools including call hierarchy are implemented. Plugin/custom tool registry work is deferred until sandbox and permission boundaries are clearer.
+Phase 0 through Phase 3 are complete. Phase 3.5 runner/session/tool parity is complete for the current bootstrap scope: sessions, native tool calls, durable tool settlement, compaction, model/auth commands, plan/build agents, OpenCode-style planning tools, `webfetch`, `websearch`, `skill`, foreground/background `task`, invalid-tool handling, and TypeScript/JavaScript LSP tools including call hierarchy are implemented. Phase 4 multi-provider foundations and configurable MAGI engine selection are in place. Phase 4.5 TUI usability is complete for the Ink baseline: startup dashboard, status/footer affordances, transcript viewport, selectors, semantic message cards, concise tool cards, and interactive question prompts are implemented. Plugin/custom tool registry work is deferred until sandbox and permission boundaries are clearer.

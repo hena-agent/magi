@@ -28,6 +28,8 @@
 type EngineId = "claude" | "gpt" | "gemini" | (string & {})
 ```
 
+`EngineId` is a logical engine/provider identifier, not a fixed three-family enum. MAGI selection can use any configured provider family that passes readiness checks.
+
 ## Task
 ```ts
 type Task = {

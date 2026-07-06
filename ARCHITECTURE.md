@@ -7,14 +7,14 @@
 
 ## Bootstrap Architecture
 - Start with a direct terminal process, not a daemon/server architecture.
-- Use the current Ink TUI only as the bootstrap shell; defer rich terminal UX until the self-hosting agent loop works.
+- Use the current Ink TUI as the bootstrap daily-driver shell; defer full OpenTUI migration, mouse support, rich diff viewing, and timeline branching until the session runner and safety boundaries are clearer.
 - Use SQLite-backed append-only session events for persisted sessions, with draft sessions held in memory until the first successful assistant response.
 - Implement a typed tool registry with `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`, `webfetch`, `websearch`, `todowrite`, `question`, `skill`, TypeScript/JavaScript LSP tools, `task`, and `plan_exit`.
-- Use one primary model adapter first; MAGI multi-engine review comes after the normal coding loop works.
+- Use one primary model adapter for the normal loop; MAGI multi-engine foundations use configurable provider pools and remain gated behind explicit high-assurance workflows.
 - Keep interfaces narrow so the bootstrap loop can later be replaced by a richer session runner.
 
 ## Main Components
-- TUI shell: receives user input, streams assistant output, and displays tool activity; richer TUI can come after self-hosting works.
+- TUI shell: receives user input, displays status/session/model state, offers command selectors, renders transcript/tool/question overlays, and keeps the normal coding loop usable from the terminal.
 - Session manager: stores conversation state, compact summaries, lifecycle events, tool settlements, todos, task updates, plan exits, and decision trails.
 - Workspace adapter: resolves repo paths, reads files, searches content, and applies patches.
 - Tool registry: exposes typed tools with input schemas, permission levels, and audit behavior.
