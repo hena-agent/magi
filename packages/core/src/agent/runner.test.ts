@@ -28,6 +28,96 @@ it("uses native tool calls before falling back to JSON actions", async () => {
   expect(result.finalText).toBe("done");
 });
 
+it("executes parallel-safe native tool calls from one step concurrently", async () => {
+  const executed: string[] = [];
+  let running = 0;
+  let maxRunning = 0;
+  let stepCalls = 0;
+
+  const result = await runEventDrivenAgent({
+    engine: {
+      async generateText() {
+        return { text: JSON.stringify({ type: "finish", summary: "done" }) };
+      },
+      async generateStep() {
+        stepCalls += 1;
+        if (stepCalls > 1) {
+          return { text: "done", toolCalls: [] };
+        }
+
+        return {
+          text: "",
+          toolCalls: [
+            { id: "tool-1", name: "read", input: { path: "README.md" } },
+            { id: "tool-2", name: "glob", input: { pattern: "**/*.ts" } },
+          ],
+        };
+      },
+    },
+    userMessage: "Inspect files",
+    async executeAction(action) {
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      executed.push(action.type);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      running -= 1;
+
+      return `${action.type} result`;
+    },
+  });
+
+  expect(executed).toEqual(["read", "glob"]);
+  expect(maxRunning).toBe(2);
+  expect(result.steps.slice(0, 2).map((step) => step.action.type)).toEqual(["read", "glob"]);
+  expect(result.status).toBe("completed");
+});
+
+it("keeps mixed native tool calls sequential", async () => {
+  const executed: string[] = [];
+  let running = 0;
+  let maxRunning = 0;
+  let stepCalls = 0;
+
+  await runEventDrivenAgent({
+    engine: {
+      async generateText() {
+        return { text: JSON.stringify({ type: "finish", summary: "done" }) };
+      },
+      async generateStep() {
+        stepCalls += 1;
+        if (stepCalls > 1) {
+          return { text: "done", toolCalls: [] };
+        }
+
+        return {
+          text: "",
+          toolCalls: [
+            { id: "tool-1", name: "read", input: { path: "README.md" } },
+            {
+              id: "tool-2",
+              name: "apply_patch",
+              input: { patchText: "*** Begin Patch\n*** End Patch" },
+            },
+          ],
+        };
+      },
+    },
+    userMessage: "Read then patch",
+    async executeAction(action) {
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      executed.push(action.type);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      running -= 1;
+
+      return `${action.type} result`;
+    },
+  });
+
+  expect(executed).toEqual(["read", "apply_patch"]);
+  expect(maxRunning).toBe(1);
+});
+
 it("exposes apply_patch for GPT Codex-style models", async () => {
   let tools: string[] = [];
   let stepCalls = 0;

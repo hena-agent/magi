@@ -79,7 +79,7 @@ async function runAgentIteration(
 
   const isLastStep = iteration >= maxIterations;
   const stepId = startStep(input, state, isLastStep);
-  const action = await generateActionOrEmitFailure(
+  const actions = await generateActionsOrEmitFailure(
     input,
     state.runId,
     stepId,
@@ -88,17 +88,17 @@ async function runAgentIteration(
     iteration,
     maxIterations,
   );
-  const completed = await handleTerminalAction(input, state, stepId, action);
+  const completed = await handleTerminalActions(input, state, stepId, actions);
 
   if (completed) return completed;
 
-  const executableAction = toExecutableAction(action);
+  const executableActions = actions.map(toExecutableAction);
 
   if (isLastStep) {
-    return await handleFinalStep(input, state, stepId, executableAction);
+    return await handleFinalStep(input, state, stepId, executableActions);
   }
 
-  await executeNonTerminalAction(input, state, stepId, executableAction);
+  await executeNonTerminalActions(input, state, stepId, executableActions);
 
   return undefined;
 }
@@ -116,7 +116,7 @@ function startStep(input: RunInput, state: RunState, isLastStep: boolean): strin
   return stepId;
 }
 
-async function generateActionOrEmitFailure(
+async function generateActionsOrEmitFailure(
   input: RunInput,
   runId: string,
   stepId: string,
@@ -124,9 +124,9 @@ async function generateActionOrEmitFailure(
   observations: string[],
   iteration: number,
   maxIterations: number,
-): Promise<AgentAction> {
+): Promise<AgentAction[]> {
   try {
-    return await generateAgentAction({
+    return await generateAgentActions({
       engine: input.engine,
       agent,
       userMessage: input.userMessage,
@@ -155,12 +155,14 @@ function toExecutableAction(action: AgentAction): ExecutableAgentAction {
   return action;
 }
 
-async function handleTerminalAction(
+async function handleTerminalActions(
   input: RunInput,
   state: RunState,
   stepId: string,
-  action: AgentAction,
+  actions: AgentAction[],
 ): Promise<AgentRunResult | undefined> {
+  const [action] = actions;
+  if (actions.length !== 1 || !action) return undefined;
   if (action.type !== "answer" && action.type !== "finish") return undefined;
 
   state.steps.push({ action });
@@ -180,12 +182,14 @@ async function handleFinalStep(
   input: RunInput,
   state: RunState,
   stepId: string,
-  action: ExecutableAgentAction,
+  actions: ExecutableAgentAction[],
 ): Promise<AgentRunResult> {
   const observation =
     "Maximum agent steps reached. Tools are disabled on the final step; the model must provide a final answer.";
-  state.steps.push({ action, observation });
-  state.observations.push(formatObservation(action, observation));
+  for (const action of actions) {
+    state.steps.push({ action, observation });
+    state.observations.push(formatObservation(action, observation));
+  }
   input.onEvent?.({
     type: "agent_step_ended",
     payload: { runId: state.runId, stepId, status: "completed" },
@@ -198,24 +202,71 @@ async function handleFinalStep(
   };
 }
 
-async function executeNonTerminalAction(
+async function executeNonTerminalActions(
   input: RunInput,
   state: RunState,
   stepId: string,
-  action: ExecutableAgentAction,
+  actions: ExecutableAgentAction[],
 ): Promise<void> {
+  const results = canExecuteActionsInParallel(actions)
+    ? await Promise.all(actions.map((action) => executeOneNonTerminalAction(input, state, action)))
+    : await executeActionsSequentially(input, state, actions);
+
+  for (const { action, observation } of results) {
+    state.steps.push({ action, observation });
+    state.observations.push(formatObservation(action, observation));
+  }
+  input.onEvent?.({
+    type: "agent_step_ended",
+    payload: { runId: state.runId, stepId, status: "waiting_for_tools" },
+  });
+}
+
+async function executeActionsSequentially(
+  input: RunInput,
+  state: RunState,
+  actions: ExecutableAgentAction[],
+): Promise<{ action: ExecutableAgentAction; observation: string }[]> {
+  const results: { action: ExecutableAgentAction; observation: string }[] = [];
+
+  for (const action of actions) {
+    results.push(await executeOneNonTerminalAction(input, state, action));
+  }
+
+  return results;
+}
+
+async function executeOneNonTerminalAction(
+  input: RunInput,
+  state: RunState,
+  action: ExecutableAgentAction,
+): Promise<{ action: ExecutableAgentAction; observation: string }> {
   const repeatedObservation = recordActionOccurrence(state.actionCounts, action);
   const observation =
     repeatedObservation ??
     (action.type === "invalid_tool"
       ? formatInvalidToolObservation(action)
       : await input.executeAction(action));
-  state.steps.push({ action, observation });
-  state.observations.push(formatObservation(action, observation));
-  input.onEvent?.({
-    type: "agent_step_ended",
-    payload: { runId: state.runId, stepId, status: "waiting_for_tools" },
-  });
+
+  return { action, observation };
+}
+
+function canExecuteActionsInParallel(actions: ExecutableAgentAction[]): boolean {
+  return actions.length > 1 && actions.every(isParallelSafeAction);
+}
+
+function isParallelSafeAction(action: ExecutableAgentAction): boolean {
+  return (
+    action.type === "read" ||
+    action.type === "glob" ||
+    action.type === "grep" ||
+    action.type === "lsp_symbols" ||
+    action.type === "lsp_definition" ||
+    action.type === "lsp_references" ||
+    action.type === "lsp_hover" ||
+    action.type === "lsp_call_hierarchy" ||
+    action.type === "invalid_tool"
+  );
 }
 
 function recordActionOccurrence(
@@ -231,7 +282,7 @@ function recordActionOccurrence(
     : undefined;
 }
 
-async function generateAgentAction(input: {
+async function generateAgentActions(input: {
   engine: PrimaryModelAdapter;
   agent: AgentInfo;
   userMessage: string;
@@ -241,9 +292,9 @@ async function generateAgentAction(input: {
   iteration: number;
   maxIterations: number;
   isLastStep: boolean;
-}): Promise<AgentAction> {
-  const nativeAction = await tryGenerateNativeToolAction(input);
-  if (nativeAction) return nativeAction;
+}): Promise<AgentAction[]> {
+  const nativeActions = await tryGenerateNativeToolActions(input);
+  if (nativeActions) return nativeActions;
 
   const response = await input.engine.generateText({
     system: buildAgentSystemPrompt(
@@ -255,10 +306,10 @@ async function generateAgentAction(input: {
     prompt: formatAgentTurnPrompt({ ...input, model: input.engine.provider?.model }),
   });
 
-  return validateAgentAction(parseJsonObjectFromText(response.text));
+  return [validateAgentAction(parseJsonObjectFromText(response.text))];
 }
 
-async function tryGenerateNativeToolAction(input: {
+async function tryGenerateNativeToolActions(input: {
   engine: PrimaryModelAdapter;
   agent: AgentInfo;
   userMessage: string;
@@ -268,7 +319,7 @@ async function tryGenerateNativeToolAction(input: {
   iteration: number;
   maxIterations: number;
   isLastStep: boolean;
-}): Promise<AgentAction | undefined> {
+}): Promise<AgentAction[] | undefined> {
   if (input.isLastStep || !input.engine.generateStep) return undefined;
 
   try {
@@ -283,11 +334,11 @@ async function tryGenerateNativeToolAction(input: {
       tools: getNativeToolDefinitions(input.agent, input.engine.provider?.model),
       toolChoice: "auto",
     });
-    const [toolCall] = nativeResponse.toolCalls;
-
-    if (toolCall) return toolCallToAgentAction(toolCall);
+    if (nativeResponse.toolCalls.length > 0) {
+      return nativeResponse.toolCalls.map(toolCallToAgentAction);
+    }
     if (nativeResponse.text.trim().length > 0)
-      return { type: "answer", content: nativeResponse.text };
+      return [{ type: "answer", content: nativeResponse.text }];
   } catch {
     // Fall back to the JSON action protocol for providers without native tool-call support.
   }
