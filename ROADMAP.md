@@ -93,10 +93,12 @@
   - [x] Add TUI-level coverage for draft session persistence.
 
 ## Phase 4: Multi-Engine Support
-- [ ] Implement model adapter interface.
-- [ ] Add Claude-family adapter.
-- [ ] Add GPT-family adapter.
-- [ ] Add Gemini-family adapter.
+- [x] Implement model adapter interface.
+- [x] Add Claude-family adapter.
+- [x] Add GPT-family adapter.
+- [x] Add Gemini-family adapter.
+- [x] Add Models.dev catalog loading and known-provider projection.
+- [x] Add MAGI GPT/Claude/Gemini engine readiness selection.
 - [ ] Implement adaptive weighted initiator selection.
 - [ ] Implement reward/penalty updates from sandbox and vote outcomes.
 
