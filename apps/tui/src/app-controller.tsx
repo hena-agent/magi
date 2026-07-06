@@ -152,6 +152,22 @@ const slashCommands: SlashCommandInfo[] = [
   { name: "todowrite", usage: "/todowrite <json>", description: "Update session todo list" },
   { name: "question", usage: "/question <json>", description: "Ask structured questions" },
   { name: "skill", usage: "/skill <name>", description: "Load a named skill" },
+  { name: "lsp_symbols", usage: "/lsp_symbols <file>", description: "List document symbols" },
+  {
+    name: "lsp_definition",
+    usage: "/lsp_definition <file> <line> <character>",
+    description: "Find symbol definitions",
+  },
+  {
+    name: "lsp_references",
+    usage: "/lsp_references <file> <line> <character>",
+    description: "Find symbol references",
+  },
+  {
+    name: "lsp_hover",
+    usage: "/lsp_hover <file> <line> <character>",
+    description: "Show hover/type info",
+  },
   { name: "bash", usage: "/bash <command>", description: "Run a shell command with permission" },
   { name: "apply_patch", usage: "/apply_patch <patch-file>", description: "Apply a patch file" },
   {
@@ -720,6 +736,22 @@ export function AppController() {
         );
       case "skill":
         return await executeToolAction(createToolCall("skill", { name: action.name }), agent);
+      case "lsp_symbols":
+        return await executeToolAction(
+          createToolCall("lsp_symbols", { filePath: action.filePath }),
+          agent,
+        );
+      case "lsp_definition":
+      case "lsp_references":
+      case "lsp_hover":
+        return await executeToolAction(
+          createToolCall(action.type, {
+            filePath: action.filePath,
+            line: action.line,
+            character: action.character,
+          }),
+          agent,
+        );
       case "task":
         return action.background === true
           ? runBackgroundTask(action, agent, providerId)
@@ -1027,6 +1059,16 @@ export function AppController() {
         return createToolCall("todowrite", { todos: action.todos });
       case "skill":
         return createToolCall("skill", { name: action.name });
+      case "lsp_symbols":
+        return createToolCall("lsp_symbols", { filePath: action.filePath });
+      case "lsp_definition":
+      case "lsp_references":
+      case "lsp_hover":
+        return createToolCall(action.type, {
+          filePath: action.filePath,
+          line: action.line,
+          character: action.character,
+        });
       case "verify":
         return createToolCall("bash", { command: action.command ?? "" });
       case "question":
@@ -2186,6 +2228,19 @@ function parseToolCommand(command: string, rawArgs: string): ToolCall | undefine
       return createToolCall(command, { questions: JSON.parse(rawArgs) as unknown });
     case "skill":
       return createToolCall(command, { name: rawArgs.trim() });
+    case "lsp_symbols":
+      return createToolCall(command, { filePath: rawArgs.trim() });
+    case "lsp_definition":
+    case "lsp_references":
+    case "lsp_hover": {
+      const [filePath = "", line = "", character = ""] = rawArgs.split(/\s+/);
+
+      return createToolCall(command, {
+        filePath,
+        line: Number(line),
+        character: Number(character),
+      });
+    }
     case "task":
       return undefined;
     case "plan_exit":
@@ -2454,7 +2509,11 @@ function isToolName(value: string): value is ToolName {
     value === "webfetch" ||
     value === "todowrite" ||
     value === "question" ||
-    value === "skill"
+    value === "skill" ||
+    value === "lsp_symbols" ||
+    value === "lsp_definition" ||
+    value === "lsp_references" ||
+    value === "lsp_hover"
   );
 }
 
@@ -2505,6 +2564,13 @@ function formatToolResultMessage(result: ToolResult, input: unknown): string {
       return `question:\n${truncate(result.output)}`;
     case "skill":
       return `skill:\n${truncate(result.output)}`;
+    case "lsp_symbols":
+    case "lsp_definition":
+    case "lsp_references":
+    case "lsp_hover": {
+      const filePath = readInputString(input, "filePath") ?? "file";
+      return `${result.name}: ${filePath}\n${truncate(output)}`;
+    }
     default:
       return `${result.name}: ${formatOutputSummary(result.output)}`;
   }
