@@ -123,6 +123,7 @@ it("maps permissions for tool names", () => {
   expect(getToolPermission("apply_patch")).toBe("write");
   expect(getToolPermission("bash")).toBe("shell");
   expect(getToolPermission("webfetch")).toBe("network");
+  expect(getToolPermission("websearch")).toBe("network");
   expect(getToolPermission("todowrite")).toBe("read");
   expect(getToolPermission("question")).toBe("read");
 });

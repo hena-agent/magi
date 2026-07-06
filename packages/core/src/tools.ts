@@ -19,6 +19,7 @@ import type {
   ToolSettlementStatus,
 } from "./tools/types.js";
 import { webfetchTool } from "./tools/webfetch.js";
+import { websearchTool } from "./tools/websearch.js";
 import { writeTool } from "./tools/write.js";
 
 export type {
@@ -36,7 +37,7 @@ export function getToolPermission(toolName: ToolName): ToolPermission {
     return "shell";
   }
 
-  if (toolName === "webfetch") {
+  if (toolName === "webfetch" || toolName === "websearch") {
     return "network";
   }
 
@@ -95,6 +96,8 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
         return createOkResult(call, bashTool(call.input, runtime));
       case "webfetch":
         return createOkResult(call, await webfetchTool(call.input));
+      case "websearch":
+        return createOkResult(call, await websearchTool(call.input));
       case "todowrite":
         return createOkResult(call, todowriteTool(call.input));
       case "question":
