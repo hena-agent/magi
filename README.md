@@ -113,6 +113,24 @@ For source execution during debugging, use:
 pnpm --filter @magi/tui start:tsx
 ```
 
+An experimental OpenTUI native renderer path is available:
+
+```sh
+pnpm --filter @magi/tui start:opentui
+```
+
+To print the current migration baseline without entering native rendering:
+
+```sh
+pnpm --filter @magi/tui start:opentui:info
+```
+
+For non-interactive smoke verification:
+
+```sh
+MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui
+```
+
 ## Development
 
 Run incremental TypeScript build watchers for all workspaces:
