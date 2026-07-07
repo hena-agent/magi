@@ -2,8 +2,8 @@ import { Box, Text } from "ink";
 
 export function Composer(props: { prompt: string; cursor: number; disabled: boolean }) {
   return (
-    <Box borderStyle="round" borderColor={props.disabled ? "gray" : "green"} paddingX={1}>
-      <Text color={props.disabled ? "gray" : "green"}>{props.disabled ? "waiting" : ">"} </Text>
+    <Box borderStyle="round" borderColor="gray" paddingX={1}>
+      <Text dimColor={props.disabled}>{props.disabled ? "waiting" : ">"} </Text>
       <PromptText prompt={props.prompt} cursor={props.cursor} />
     </Box>
   );

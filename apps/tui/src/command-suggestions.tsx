@@ -9,18 +9,12 @@ export function CommandSuggestions(props: {
   if (props.hidden || props.commands.length === 0) return null;
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="blue" paddingX={1}>
-      <Text color="blue" bold>
-        Commands
-      </Text>
+    <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1}>
+      <Text bold>Commands</Text>
       {props.commands.map((command, index) => {
         const selected = index === props.selectedIndex;
         return (
-          <Text
-            key={command.name}
-            color={selected ? "black" : undefined}
-            backgroundColor={selected ? "cyan" : undefined}
-          >
+          <Text key={command.name} bold={selected}>
             {`${selected ? "›" : " "} ${command.usage}  [${command.category ?? "Tools"}] ${command.description}`}
           </Text>
         );

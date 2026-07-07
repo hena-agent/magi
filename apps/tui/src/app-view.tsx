@@ -1,15 +1,14 @@
 import { Box } from "ink";
 import type {
-  DisplayMessage,
   PendingPermission,
   PendingQuestion,
   PendingSelector,
   SlashCommandInfo,
+  TranscriptMessage,
 } from "./app-controller.js";
 import { CommandSuggestions } from "./command-suggestions.js";
 import { Composer } from "./composer.js";
 import { OverlayArea } from "./overlays.js";
-import { FooterBar, StatusBar } from "./status-bar.js";
 import { TranscriptView } from "./transcript-view.js";
 
 type AppViewProps = {
@@ -20,7 +19,7 @@ type AppViewProps = {
   effectiveModelProviderId: string | undefined;
   expandedMessageIds: Set<string>;
   isBusy: boolean;
-  messages: DisplayMessage[];
+  messages: TranscriptMessage[];
   mode: string;
   pendingPermission: PendingPermission | undefined;
   pendingQuestion: PendingQuestion | undefined;
@@ -33,6 +32,7 @@ type AppViewProps = {
   questionOptionIndex: number;
   questionSelectedOptionIndexes: Set<number>;
   riskLevel: string;
+  runVisualization: string;
   selectedMessageId: string | undefined;
   sessionId: string | undefined;
   slashCommandSelectionIndex: number;
@@ -45,13 +45,22 @@ type AppViewProps = {
 export function AppView(props: AppViewProps) {
   return (
     <Box flexDirection="column" gap={1}>
-      <StatusBar {...props} />
       <TranscriptView
+        activeStatus={props.activeStatus}
         activeAgentId={props.activeAgentId}
         activeModelId={props.activeProviderId ?? props.effectiveModelProviderId ?? "none"}
+        canReadInput={props.canReadInput}
+        isBusy={props.isBusy}
         messages={props.messages}
+        mode={props.mode}
+        planFilePath={props.planFilePath}
+        queuedPromptCount={props.queuedPromptCount}
+        riskLevel={props.riskLevel}
+        runVisualization={props.runVisualization}
         scrollOffset={props.transcriptScrollOffset}
         selectedMessageId={props.selectedMessageId}
+        sessionId={props.sessionId}
+        todoOpenCount={props.todoOpenCount}
         expandedMessageIds={props.expandedMessageIds}
         workspaceRoot={props.workspaceRoot}
       />
@@ -80,13 +89,6 @@ export function AppView(props: AppViewProps) {
           props.pendingQuestion !== undefined ||
           props.pendingSelector !== undefined
         }
-      />
-      <FooterBar
-        activeStatus={props.activeStatus}
-        canReadInput={props.canReadInput}
-        isBusy={props.isBusy}
-        queuedPromptCount={props.queuedPromptCount}
-        scrollOffset={props.transcriptScrollOffset}
       />
     </Box>
   );

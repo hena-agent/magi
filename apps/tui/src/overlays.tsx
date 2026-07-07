@@ -33,22 +33,14 @@ export function OverlayArea(props: {
 
 function SelectorOverlay(props: { selector: PendingSelector }) {
   return (
-    <Box flexDirection="column" borderStyle="double" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold>
-        {` ${props.selector.title} `}
-      </Text>
+    <Box flexDirection="column" borderStyle="double" borderColor="gray" paddingX={1}>
+      <Text bold>{` ${props.selector.title} `}</Text>
       {props.selector.subtitle ? <Text dimColor>{props.selector.subtitle}</Text> : null}
       {props.selector.items.map((item, index) => {
         const selected = index === props.selector.selectedIndex;
         return (
           <Box key={item.value} flexDirection="column" marginTop={index === 0 ? 1 : 0}>
-            <Text
-              color={selected ? "black" : "white"}
-              backgroundColor={selected ? "cyan" : undefined}
-              bold={selected}
-            >
-              {`${selected ? "›" : " "} ${item.label}`}
-            </Text>
+            <Text bold={selected}>{`${selected ? "›" : " "} ${item.label}`}</Text>
             {item.description ? <Text dimColor>{`  ${item.description}`}</Text> : null}
           </Box>
         );
@@ -60,10 +52,8 @@ function SelectorOverlay(props: { selector: PendingSelector }) {
 
 function PermissionOverlay(props: { pendingPermission: PendingPermission }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text color="yellow" bold>
-        Permission Required
-      </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+      <Text bold>Permission Required</Text>
       <Text>{formatPermissionDescription(props.pendingPermission.description)}</Text>
       <Text dimColor>[y] allow [n] deny [esc] cancel</Text>
     </Box>
@@ -93,13 +83,11 @@ function QuestionOverlay(props: {
           : "type an answer";
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text color="yellow" bold>
-        Question
-      </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+      <Text bold>Question</Text>
       {props.pendingQuestion.questions.map((question, questionIndex) => (
         <Box key={`${question.header}:${question.question}`} flexDirection="column" marginTop={1}>
-          <Text color="cyan">{`${questionIndex + 1}. ${question.header}`}</Text>
+          <Text bold>{`${questionIndex + 1}. ${question.header}`}</Text>
           <Text>{question.question}</Text>
           {question.options.map((option, optionIndex) => (
             <QuestionOptionLine
@@ -116,7 +104,7 @@ function QuestionOverlay(props: {
           ) : null}
         </Box>
       ))}
-      <Text color={props.answer.length > 0 ? "green" : "cyan"}>{mode}</Text>
+      <Text>{mode}</Text>
       <Text>{`answer> ${props.answer}`}</Text>
       <Text dimColor>↑/↓ select space mark enter submit esc cancel</Text>
     </Box>
@@ -131,11 +119,7 @@ function QuestionOptionLine(props: {
   label: string;
 }) {
   return (
-    <Text
-      dimColor={!props.active && !props.checked}
-      color={props.active ? "black" : props.checked ? "cyan" : undefined}
-      backgroundColor={props.active ? "cyan" : undefined}
-    >
+    <Text dimColor={!props.active && !props.checked} bold={props.active}>
       {`${props.active ? "›" : " "} ${props.checked ? "[x]" : "[ ]"} ${props.index + 1}. ${props.label}${props.description ? ` - ${props.description}` : ""}`}
     </Text>
   );

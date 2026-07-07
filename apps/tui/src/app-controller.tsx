@@ -29,7 +29,6 @@ import {
   loginOpenAICodexBrowser,
   loginOpenAICodexHeadless,
   MAGI_BUILD_SWITCH_REMINDER,
-  MAGI_PLAN_MODE_PROMPT,
   mergeAgentPermission,
   planSessionMaintenance,
   refreshOpenAICodexAuth,
@@ -60,23 +59,63 @@ import {
   type DraftSessionEvent,
 } from "./draft-session.js";
 
-export type DisplayMessage = {
+export type TranscriptToolStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "error"
+  | "denied"
+  | "skipped";
+
+export type TranscriptPart =
+  | {
+      id: string;
+      type: "text";
+      text: string;
+      synthetic?: boolean;
+    }
+  | {
+      id: string;
+      type: "reasoning";
+      text: string;
+      time: { start: number; end?: number };
+    }
+  | {
+      id: string;
+      type: "tool";
+      tool: string;
+      state: {
+        status: TranscriptToolStatus;
+        input?: unknown;
+        output?: string;
+        error?: string;
+        title?: string;
+        metadata?: {
+          durationMs?: number;
+          target?: string;
+          countLabel?: string;
+          summary?: string;
+          preview?: string;
+        };
+        time: { start: number; end?: number };
+      };
+    }
+  | {
+      id: string;
+      type: "status";
+      text: string;
+      tone?: "normal" | "muted" | "success" | "warning" | "danger";
+    };
+
+export type TranscriptMessage = {
   id: string;
-  content: string;
-  detail?: string;
-  kind?: "user" | "assistant" | "tool" | "status" | "error" | "system";
-  title?: string;
-  tone?: "normal" | "muted" | "success" | "warning" | "danger";
-  expandable?: boolean;
-  collapsed?: boolean;
-  metadata?: {
-    toolName?: string;
-    durationMs?: number;
-    target?: string;
-    countLabel?: string;
-    summary?: string;
-    preview?: string;
-  };
+  role: "user" | "assistant" | "system";
+  agentId?: string;
+  providerId?: string;
+  model?: string;
+  createdAt?: number;
+  completedAt?: number;
+  parts: TranscriptPart[];
 };
 
 export type PendingPermission = {
@@ -394,6 +433,28 @@ type QueuedPrompt = {
   queuedAt: string;
 };
 
+type ActiveRunProgress = {
+  runId: string | undefined;
+  agentId: string | undefined;
+  lastStepId: string | undefined;
+  steps: number;
+  lastStepStatus: string | undefined;
+  lastTool: string | undefined;
+  thinkingStartedAtMs: number | undefined;
+  toolStatuses: Map<string, string>;
+};
+
+type LiveAssistantStream = {
+  text: string;
+  reasoning: Map<string, string>;
+  toolInputs: Map<string, { toolName: string; input: string }>;
+};
+
+type LiveToolActivity = {
+  toolCounts: Map<string, number>;
+  displayed: boolean;
+};
+
 export function AppController() {
   const { exit } = useApp();
   const config = loadConfig();
@@ -406,6 +467,9 @@ export function AppController() {
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const steeringInputsRef = useRef<string[]>([]);
   const interruptionRequestedRef = useRef(false);
+  const activeRunProgressRef = useRef<ActiveRunProgress>(createEmptyRunProgress());
+  const liveAssistantStreamsRef = useRef<Map<string, LiveAssistantStream>>(new Map());
+  const liveToolActivitiesRef = useRef<Map<string, LiveToolActivity>>(new Map());
   const [session, setSession] = useState<Session | undefined>(initialSession.session);
   const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => getDefaultAgent());
   const [activeProviderId, setActiveProviderId] = useState<string | undefined>(() =>
@@ -417,22 +481,31 @@ export function AppController() {
   const promptHistoryRef = useRef<string[]>([]);
   const promptHistoryIndexRef = useRef<number | undefined>(undefined);
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
-  const [messages, setMessages] = useState<DisplayMessage[]>(() => [
+  const [messages, setMessages] = useState<TranscriptMessage[]>(() => [
     {
       id: "session-start",
-      content:
-        initialSession.session === undefined
-          ? "Draft session: a session will be saved after the first successful prompt."
-          : `${initialSession.resumed ? "Resumed latest session" : "Started new session"}: ${initialSession.session.id}${initialSession.session.title ? ` (${initialSession.session.title})` : ""}`,
+      role: "system",
+      parts: [
+        {
+          id: "session-start:status",
+          type: "status",
+          tone: "muted",
+          text:
+            initialSession.session === undefined
+              ? "Draft session: a session will be saved after the first successful prompt."
+              : `${initialSession.resumed ? "Resumed latest session" : "Started new session"}: ${initialSession.session.id}${initialSession.session.title ? ` (${initialSession.session.title})` : ""}`,
+        },
+      ],
     },
     ...(initialSession.session === undefined
       ? []
-      : sessionEventsToDisplayMessages(store.listEvents(initialSession.session.id), 30)),
+      : sessionEventsToTranscriptMessages(store.listEvents(initialSession.session.id), 30)),
   ]);
   const [transcriptScrollOffset, setTranscriptScrollOffset] = useState(0);
   const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(() => new Set());
   const [activeStatus, setActiveStatus] = useState("Ready");
+  const [runVisualization, setRunVisualization] = useState("idle");
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion>();
   const [pendingSelector, setPendingSelector] = useState<PendingSelector>();
@@ -464,6 +537,20 @@ export function AppController() {
     }
   }, [messages, selectedMessageId, expandedMessageIds]);
 
+  useEffect(() => {
+    if (!isBusy) return;
+
+    const interval = setInterval(() => {
+      const progress = activeRunProgressRef.current;
+      if (progress.thinkingStartedAtMs === undefined) return;
+
+      setActiveStatus(formatThinkingStatus(progress));
+      setRunVisualization(formatRunVisualization(progress));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isBusy]);
+
   function getEffectiveProviders(): EffectiveModelProvider[] {
     return listEffectiveModelProviders({
       configProviders: config.modelProviders,
@@ -477,17 +564,6 @@ export function AppController() {
 
   function isPlanFilePath(filePath: string): boolean {
     return filePath === getPlanFilePath();
-  }
-
-  function addAgentModeReminders(content: string, agent: AgentInfo): string {
-    if (agent.id !== "plan") {
-      return content;
-    }
-
-    const planPath = getPlanFilePath();
-    const planInfo = `No plan file exists yet. You should create your plan at ${planPath} using the write tool.`;
-
-    return [content, "", MAGI_PLAN_MODE_PROMPT.replace("$" + "{planInfo}", planInfo)].join("\n");
   }
 
   useEffect(() => {
@@ -805,12 +881,14 @@ export function AppController() {
   }
 
   function selectTranscriptMessage(direction: number): void {
-    if (messages.length === 0) return;
+    const selectableIds = getSelectableTranscriptIds(messages);
+    if (selectableIds.length === 0) return;
     const currentIndex = selectedMessageId
-      ? messages.findIndex((message) => message.id === selectedMessageId)
-      : messages.length - 1;
-    const nextIndex = Math.max(0, Math.min(messages.length - 1, currentIndex + direction));
-    const nextMessageId = messages[nextIndex]?.id;
+      ? selectableIds.findIndex((id) => id === selectedMessageId)
+      : selectableIds.length - 1;
+    const normalizedIndex = currentIndex === -1 ? selectableIds.length - 1 : currentIndex;
+    const nextIndex = Math.max(0, Math.min(selectableIds.length - 1, normalizedIndex + direction));
+    const nextMessageId = selectableIds[nextIndex];
     setSelectedMessageId(nextMessageId);
     if (nextMessageId) {
       keepTranscriptMessageVisible(nextMessageId, expandedMessageIds);
@@ -819,8 +897,7 @@ export function AppController() {
 
   function toggleSelectedMessageExpansion(): void {
     if (!selectedMessageId) return;
-    const selected = messages.find((message) => message.id === selectedMessageId);
-    if (!selected?.expandable) return;
+    if (!isExpandableTranscriptId(messages, selectedMessageId)) return;
     setExpandedMessageIds((expandedIds) => {
       const next = new Set(expandedIds);
       if (next.has(selectedMessageId)) {
@@ -1087,7 +1164,7 @@ export function AppController() {
       type: "user_message",
       payload: { content, agentId: agent.id, providerId },
     });
-    addMessage(`User: ${content}`, `${userEvent.id}-user`);
+    addUserMessage(content, `${userEvent.id}-user`, agent, providerId);
 
     await runSingleEngineAgentTurn(content, agent, providerId);
   }
@@ -1112,7 +1189,6 @@ export function AppController() {
         steeringInputs.length === 0
           ? content
           : `${content}\n\nSteering input for this run:\n${steeringInputs.map((input) => `- ${input}`).join("\n")}`;
-      const agentContent = addAgentModeReminders(effectiveContent, agent);
       const sessionContext = buildAgentSessionContext({
         events: getCurrentSessionEvents().slice(0, -1),
       });
@@ -1120,9 +1196,10 @@ export function AppController() {
       const result = await runAgentTurn({
         engine: adapter,
         agent,
-        userMessage: agentContent,
+        userMessage: effectiveContent,
         systemContext,
         sessionContext,
+        maxIterations: config.agent.maxIterations,
         shouldInterrupt() {
           return interruptionRequestedRef.current;
         },
@@ -1145,7 +1222,10 @@ export function AppController() {
         },
       });
       persistDraftSessionIfNeeded(content, result.finalText);
-      addMessage(`Assistant: ${truncate(result.finalText)}`, event.id);
+      completeLatestAssistantMessage(event.id, truncate(result.finalText), agent, {
+        providerId: adapter.provider?.id ?? providerId,
+        model: adapter.provider?.model,
+      });
     } catch (error) {
       if (!session) {
         draftEventsRef.current = [];
@@ -1162,14 +1242,17 @@ export function AppController() {
     agent: AgentInfo,
     providerId: string | undefined = activeProviderId,
   ): Promise<string> {
+    const actionToolCall = (name: Parameters<typeof createToolCall>[0], input: unknown) =>
+      createToolCall(name, input, action.toolCallId);
+
     switch (action.type) {
       case "read":
-        return await executeToolAction(createToolCall("read", { path: action.path }), agent);
+        return await executeToolAction(actionToolCall("read", { path: action.path }), agent);
       case "glob":
-        return await executeToolAction(createToolCall("glob", { pattern: action.pattern }), agent);
+        return await executeToolAction(actionToolCall("glob", { pattern: action.pattern }), agent);
       case "grep":
         return await executeToolAction(
-          createToolCall("grep", {
+          actionToolCall("grep", {
             pattern: action.pattern,
             ...(action.include === undefined ? {} : { include: action.include }),
           }),
@@ -1179,7 +1262,7 @@ export function AppController() {
         if (agent.id === "plan" && isPlanFilePath(action.filePath)) {
           return toolResultToObservation(
             await executeToolCall(
-              createToolCall("edit", {
+              actionToolCall("edit", {
                 filePath: action.filePath,
                 oldString: action.oldString,
                 newString: action.newString,
@@ -1191,7 +1274,7 @@ export function AppController() {
         }
 
         return await executeToolAction(
-          createToolCall("edit", {
+          actionToolCall("edit", {
             filePath: action.filePath,
             oldString: action.oldString,
             newString: action.newString,
@@ -1203,24 +1286,24 @@ export function AppController() {
         if (agent.id === "plan" && isPlanFilePath(action.filePath)) {
           return toolResultToObservation(
             await executeToolCall(
-              createToolCall("write", { filePath: action.filePath, content: action.content }),
+              actionToolCall("write", { filePath: action.filePath, content: action.content }),
               agent,
             ),
           );
         }
 
         return await executeToolAction(
-          createToolCall("write", { filePath: action.filePath, content: action.content }),
+          actionToolCall("write", { filePath: action.filePath, content: action.content }),
           agent,
         );
       case "apply_patch":
         return await executeToolAction(
-          createToolCall("apply_patch", { patchText: action.patchText }),
+          actionToolCall("apply_patch", { patchText: action.patchText }),
           agent,
         );
       case "webfetch":
         return await executeToolAction(
-          createToolCall("webfetch", {
+          actionToolCall("webfetch", {
             url: action.url,
             ...(action.format === undefined ? {} : { format: action.format }),
             ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
@@ -1229,7 +1312,7 @@ export function AppController() {
         );
       case "websearch":
         return await executeToolAction(
-          createToolCall("websearch", {
+          actionToolCall("websearch", {
             query: action.query,
             ...(action.providerId === undefined ? {} : { providerId: action.providerId }),
             ...(action.limit === undefined ? {} : { limit: action.limit }),
@@ -1242,17 +1325,17 @@ export function AppController() {
           agent,
         );
       case "todowrite":
-        return await executeToolAction(createToolCall("todowrite", { todos: action.todos }), agent);
+        return await executeToolAction(actionToolCall("todowrite", { todos: action.todos }), agent);
       case "question":
         return await executeToolAction(
-          createToolCall("question", { questions: action.questions }),
+          actionToolCall("question", { questions: action.questions }),
           agent,
         );
       case "skill":
-        return await executeToolAction(createToolCall("skill", { name: action.name }), agent);
+        return await executeToolAction(actionToolCall("skill", { name: action.name }), agent);
       case "lsp_symbols":
         return await executeToolAction(
-          createToolCall("lsp_symbols", { filePath: action.filePath }),
+          actionToolCall("lsp_symbols", { filePath: action.filePath }),
           agent,
         );
       case "lsp_definition":
@@ -1260,7 +1343,7 @@ export function AppController() {
       case "lsp_hover":
       case "lsp_call_hierarchy":
         return await executeToolAction(
-          createToolCall(action.type, {
+          actionToolCall(action.type, {
             filePath: action.filePath,
             line: action.line,
             character: action.character,
@@ -1287,7 +1370,7 @@ export function AppController() {
           `Proposed patch saved as event #${event.sequence}. Requesting write approval...`,
         );
         return await executeToolAction(
-          createToolCall("apply_patch", { patch: action.patch }),
+          actionToolCall("apply_patch", { patch: action.patch }),
           agent,
         );
       }
@@ -1546,35 +1629,38 @@ export function AppController() {
   }
 
   function createToolCallForExecutableAction(action: ExecutableAgentAction): ToolCall | undefined {
+    const actionToolCall = (name: Parameters<typeof createToolCall>[0], input: unknown) =>
+      createToolCall(name, input, action.toolCallId);
+
     switch (action.type) {
       case "read":
-        return createToolCall("read", { path: action.path });
+        return actionToolCall("read", { path: action.path });
       case "glob":
-        return createToolCall("glob", { pattern: action.pattern });
+        return actionToolCall("glob", { pattern: action.pattern });
       case "grep":
-        return createToolCall("grep", {
+        return actionToolCall("grep", {
           pattern: action.pattern,
           ...(action.include === undefined ? {} : { include: action.include }),
         });
       case "edit":
-        return createToolCall("edit", {
+        return actionToolCall("edit", {
           filePath: action.filePath,
           oldString: action.oldString,
           newString: action.newString,
           ...(action.replaceAll === undefined ? {} : { replaceAll: action.replaceAll }),
         });
       case "write":
-        return createToolCall("write", { filePath: action.filePath, content: action.content });
+        return actionToolCall("write", { filePath: action.filePath, content: action.content });
       case "apply_patch":
-        return createToolCall("apply_patch", { patchText: action.patchText });
+        return actionToolCall("apply_patch", { patchText: action.patchText });
       case "webfetch":
-        return createToolCall("webfetch", {
+        return actionToolCall("webfetch", {
           url: action.url,
           ...(action.format === undefined ? {} : { format: action.format }),
           ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
         });
       case "websearch":
-        return createToolCall("websearch", {
+        return actionToolCall("websearch", {
           query: action.query,
           ...(action.providerId === undefined ? {} : { providerId: action.providerId }),
           ...(action.limit === undefined ? {} : { limit: action.limit }),
@@ -1585,16 +1671,16 @@ export function AppController() {
             : { contextMaxCharacters: action.contextMaxCharacters }),
         });
       case "todowrite":
-        return createToolCall("todowrite", { todos: action.todos });
+        return actionToolCall("todowrite", { todos: action.todos });
       case "skill":
-        return createToolCall("skill", { name: action.name });
+        return actionToolCall("skill", { name: action.name });
       case "lsp_symbols":
-        return createToolCall("lsp_symbols", { filePath: action.filePath });
+        return actionToolCall("lsp_symbols", { filePath: action.filePath });
       case "lsp_definition":
       case "lsp_references":
       case "lsp_hover":
       case "lsp_call_hierarchy":
-        return createToolCall(action.type, {
+        return actionToolCall(action.type, {
           filePath: action.filePath,
           line: action.line,
           character: action.character,
@@ -1603,7 +1689,7 @@ export function AppController() {
             : {}),
         });
       case "verify":
-        return createToolCall("bash", { command: action.command ?? "" });
+        return actionToolCall("bash", { command: action.command ?? "" });
       case "question":
       case "task":
       case "plan_exit":
@@ -1716,6 +1802,7 @@ export function AppController() {
       type: "tool_settlement",
       payload: { ...createToolSettlement({ call, status: "pending" }), agentId: agent.id },
     });
+    updateRunVisualizationFromToolSettlement(call, "pending");
 
     if (policy === "deny") {
       appendSessionEvent({
@@ -1733,6 +1820,7 @@ export function AppController() {
           agentId: agent.id,
         },
       });
+      updateRunVisualizationFromToolSettlement(call, "denied");
       addMessage(`Denied by config: ${call.name}`);
       return;
     }
@@ -1765,6 +1853,7 @@ export function AppController() {
             agentId: agent.id,
           },
         });
+        updateRunVisualizationFromToolSettlement(call, "denied");
         addMessage(`Denied: ${call.name}`);
         return;
       }
@@ -1826,6 +1915,8 @@ export function AppController() {
         agentId: agent.id,
       },
     });
+    upsertToolCallPart(call, "running", { startedAtMs });
+    updateRunVisualizationFromToolSettlement(call, "running");
 
     try {
       const result =
@@ -1853,12 +1944,106 @@ export function AppController() {
           agentId: agent.id,
         },
       });
-      addDisplayMessage(formatToolResultDisplayMessage(result, call.input, { durationMs }));
+      updateRunVisualizationFromToolSettlement(call, result.ok ? "succeeded" : "failed");
+      setActiveStatus(formatCompletedToolStatus(result, call.input, durationMs));
+      upsertToolResultPart(result, call.input, { durationMs, endedAtMs: Date.now() });
       return result;
     } finally {
       setActiveStatus("Ready");
       endBusy();
     }
+  }
+
+  function upsertToolCallPart(
+    call: ToolCall,
+    status: "pending" | "running",
+    metadata: { startedAtMs?: number } = {},
+  ): void {
+    const messageId = findAssistantMessageForTool(call) ?? getActiveAssistantMessageId();
+    const target = formatToolInputTarget(call.name, call.input);
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, activeAgent, { providerId: activeProviderId }),
+      (message) =>
+        upsertTranscriptPart(message, {
+          id: findToolPartId(message, call) ?? `tool:${call.id}`,
+          type: "tool",
+          tool: call.name,
+          state: {
+            status,
+            input: call.input,
+            metadata: target ? { target } : undefined,
+            time: { start: metadata.startedAtMs ?? Date.now() },
+          },
+        }),
+    );
+  }
+
+  function upsertToolResultPart(
+    result: ToolResult,
+    input: unknown,
+    metadata: { durationMs: number; endedAtMs: number },
+  ): void {
+    const messageId =
+      findAssistantMessageForTool({ id: result.id, name: result.name, input }) ??
+      getActiveAssistantMessageId();
+    const summary = formatToolResultSummary(result, input);
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, activeAgent, { providerId: activeProviderId }),
+      (message) =>
+        upsertTranscriptPart(message, {
+          id:
+            findToolPartId(message, { id: result.id, name: result.name, input }) ??
+            `tool:${result.id}`,
+          type: "tool",
+          tool: result.name,
+          state: {
+            status: result.ok ? "completed" : "error",
+            input,
+            output: result.ok ? result.output.trim() : undefined,
+            error: result.ok ? undefined : (result.error ?? result.output).trim(),
+            title: summary.content,
+            metadata: {
+              durationMs: metadata.durationMs,
+              ...(summary.target ? { target: summary.target } : {}),
+              ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
+              ...(summary.summary ? { summary: summary.summary } : {}),
+              ...(summary.preview ? { preview: summary.preview } : {}),
+            },
+            time: { start: metadata.endedAtMs - metadata.durationMs, end: metadata.endedAtMs },
+          },
+        }),
+    );
+  }
+
+  function getActiveAssistantMessageId(): string {
+    const progress = activeRunProgressRef.current;
+    if (progress.runId && progress.lastStepId)
+      return `assistant:${progress.runId}:${progress.lastStepId}`;
+    if (progress.runId) return `assistant:${progress.runId}:tool`;
+    return `assistant:manual:${providerSessionIdRef.current}`;
+  }
+
+  function findAssistantMessageForTool(
+    call: Pick<ToolCall, "id" | "name" | "input">,
+  ): string | undefined {
+    const current = messages.findLast(
+      (message) =>
+        message.role === "assistant" &&
+        message.parts.some(
+          (part) =>
+            part.type === "tool" && (part.id === `tool:${call.id}` || isSameToolPart(part, call)),
+        ),
+    );
+    return current?.id;
+  }
+
+  function findToolPartId(
+    message: TranscriptMessage,
+    call: Pick<ToolCall, "id" | "name" | "input">,
+  ): string | undefined {
+    return message.parts.find((part) => part.type === "tool" && isSameToolPart(part, call))?.id;
   }
 
   async function runInteractiveQuestionTool(call: ToolCall): Promise<ToolResult> {
@@ -2176,11 +2361,10 @@ export function AppController() {
       })?.providerId,
     );
     setMessages([
-      {
-        id: crypto.randomUUID(),
-        content: `Resumed session: ${selectedSession.id}${selectedSession.title ? ` (${selectedSession.title})` : ""}`,
-      },
-      ...sessionEventsToDisplayMessages(selectedEvents, 30),
+      createSystemMessage(
+        `Resumed session: ${selectedSession.id}${selectedSession.title ? ` (${selectedSession.title})` : ""}`,
+      ),
+      ...sessionEventsToTranscriptMessages(selectedEvents, 30),
     ]);
   }
 
@@ -2197,10 +2381,9 @@ export function AppController() {
     setSession(undefined);
     setTodos([]);
     setMessages([
-      {
-        id: crypto.randomUUID(),
-        content: "Started a new draft session. It will be saved after the first successful prompt.",
-      },
+      createSystemMessage(
+        "Started a new draft session. It will be saved after the first successful prompt.",
+      ),
     ]);
   }
 
@@ -2673,7 +2856,12 @@ export function AppController() {
           source: "queued",
         },
       });
-      addMessage(`User: ${nextPrompt.content}`, `${userEvent.id}-user`);
+      addUserMessage(
+        nextPrompt.content,
+        `${userEvent.id}-user`,
+        nextPrompt.agent,
+        nextPrompt.providerId,
+      );
       await runSingleEngineAgentTurn(nextPrompt.content, nextPrompt.agent, nextPrompt.providerId);
     }
   }
@@ -2683,7 +2871,9 @@ export function AppController() {
       type: event.type,
       payload: { ...event.payload, agentId: agent.id },
     });
+    updateRunVisualizationFromAgentEvent(event, agent);
     updateActiveStatusFromAgentEvent(event);
+    updateLiveAssistantStreamFromAgentEvent(event);
   }
 
   function appendAgentTurnEventToSession(
@@ -2702,10 +2892,25 @@ export function AppController() {
   function updateActiveStatusFromAgentEvent(event: AgentTurnEvent): void {
     switch (event.type) {
       case "assistant_started":
-        setActiveStatus("Thinking...");
+        setActiveStatus(formatThinkingStatus(activeRunProgressRef.current));
         return;
       case "provider_error":
         setActiveStatus("Provider error");
+        addProviderErrorDisplayMessage(event);
+        return;
+      case "assistant_status": {
+        const payload = event.payload as { kind?: unknown };
+        setActiveStatus(String(payload.kind ?? "assistant status"));
+        return;
+      }
+      case "assistant_stream": {
+        const status = formatAssistantStreamStatus(event.payload);
+        if (status !== undefined) setActiveStatus(status);
+        return;
+      }
+      case "agent_tool_skipped":
+        setActiveStatus(`Skipped repeated ${event.payload.toolName}`);
+        addSkippedToolDisplayMessage(event);
         return;
       case "agent_step_ended": {
         const payload = event.payload as { status?: unknown };
@@ -2716,6 +2921,197 @@ export function AppController() {
         setActiveStatus("Preparing next step...");
         return;
     }
+  }
+
+  function updateRunVisualizationFromAgentEvent(event: AgentTurnEvent, agent: AgentInfo): void {
+    const payload = event.payload as { runId?: unknown; stepId?: unknown; status?: unknown };
+    if (typeof payload.runId === "string" && activeRunProgressRef.current.runId !== payload.runId) {
+      activeRunProgressRef.current = {
+        ...createEmptyRunProgress(),
+        runId: payload.runId,
+        agentId: agent.id,
+      };
+    }
+    if (typeof payload.stepId === "string") {
+      activeRunProgressRef.current.lastStepId = payload.stepId;
+    }
+
+    const progress = activeRunProgressRef.current;
+    if (event.type === "agent_step_started") {
+      progress.steps += 1;
+      progress.lastStepStatus = "thinking";
+      progress.thinkingStartedAtMs = undefined;
+    } else if (event.type === "assistant_started") {
+      progress.lastStepStatus = "thinking";
+      progress.thinkingStartedAtMs = Date.now();
+    } else if (event.type === "agent_step_ended" && typeof payload.status === "string") {
+      progress.lastStepStatus = payload.status;
+      progress.thinkingStartedAtMs = undefined;
+      if (typeof payload.runId === "string" && payload.status !== "waiting_for_tools") {
+        flushLiveToolActivity(payload.runId);
+      }
+    }
+
+    setRunVisualization(formatRunVisualization(progress));
+  }
+
+  function updateLiveAssistantStreamFromAgentEvent(event: AgentTurnEvent): void {
+    if (event.type !== "assistant_stream") return;
+
+    const payload = event.payload;
+    const messageId = `assistant:${payload.runId}:${payload.stepId}`;
+    const stream = getLiveAssistantStream(messageId);
+    const nextContent = applyAssistantTextStreamPayload(stream, payload);
+    const messageFactory = () =>
+      createAssistantMessage(messageId, activeAgent, {
+        providerId: activeProviderId,
+        model: config.modelProviders.find((provider) => provider.id === activeProviderId)?.model,
+      });
+
+    if (nextContent !== undefined) {
+      updateTranscriptMessage(messageId, messageFactory, (message) =>
+        upsertTranscriptPart(message, {
+          id: `${messageId}:text`,
+          type: "text",
+          text: nextContent,
+        }),
+      );
+      flushLiveToolActivity(payload.runId);
+      return;
+    }
+
+    const reasoning = formatReasoningPart(stream, payload);
+    if (reasoning !== undefined) {
+      updateTranscriptMessage(messageId, messageFactory, (message) =>
+        upsertTranscriptPart(message, reasoning),
+      );
+      return;
+    }
+
+    const toolPart = formatAssistantStreamToolPart(stream, payload);
+    if (toolPart !== undefined) {
+      updateTranscriptMessage(messageId, messageFactory, (message) =>
+        upsertTranscriptPart(message, toolPart),
+      );
+    }
+  }
+
+  function addSkippedToolDisplayMessage(
+    event: Extract<AgentTurnEvent, { type: "agent_tool_skipped" }>,
+  ): void {
+    const messageId = `assistant:${event.payload.runId}:${event.payload.stepId}`;
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, activeAgent, { providerId: activeProviderId }),
+      (message) => {
+        const partId = findMatchingToolPartId(
+          message,
+          event.payload.toolName,
+          event.payload.input,
+          event.payload.toolCallId,
+        );
+        return upsertTranscriptPart(message, {
+          id: partId,
+          type: "tool",
+          tool: event.payload.toolName,
+          state: {
+            status: "skipped",
+            input: event.payload.input,
+            error: event.payload.reason,
+            title: "skipped repeated action",
+            metadata: {
+              target: formatToolInputTarget(event.payload.toolName, event.payload.input),
+              summary: event.payload.reason,
+            },
+            time: { start: Date.now(), end: Date.now() },
+          },
+        });
+      },
+    );
+  }
+
+  function addProviderErrorDisplayMessage(
+    event: Extract<AgentTurnEvent, { type: "provider_error" }>,
+  ): void {
+    const debug = formatProviderErrorDebug(event.payload.debug);
+    const messageId = `assistant:${event.payload.runId}:${event.payload.stepId}`;
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, activeAgent, { providerId: activeProviderId }),
+      (message) =>
+        upsertTranscriptPart(message, {
+          id: `provider-error:${event.payload.runId}:${event.payload.stepId}`,
+          type: "status",
+          text: debug.summary
+            ? `${event.payload.message}\n${debug.summary}`
+            : event.payload.message,
+          tone: "danger",
+        }),
+    );
+  }
+
+  function getLiveAssistantStream(messageId: string): LiveAssistantStream {
+    const existing = liveAssistantStreamsRef.current.get(messageId);
+    if (existing) return existing;
+
+    const created: LiveAssistantStream = {
+      text: "",
+      reasoning: new Map(),
+      toolInputs: new Map(),
+    };
+    liveAssistantStreamsRef.current.set(messageId, created);
+    return created;
+  }
+
+  function updateRunVisualizationFromToolSettlement(
+    call: ToolCall,
+    status: "pending" | "running" | "succeeded" | "failed" | "denied",
+  ): void {
+    const progress = activeRunProgressRef.current;
+    progress.lastTool = call.name;
+    progress.thinkingStartedAtMs = undefined;
+    progress.toolStatuses.set(call.id, status);
+    setActiveStatus(formatToolStatus(call.name, status));
+    setRunVisualization(formatRunVisualization(progress));
+    if (status === "pending") updateLiveToolActivity(call.name);
+  }
+
+  function updateLiveToolActivity(toolName: string): void {
+    const runId = activeRunProgressRef.current.runId;
+    if (!runId) return;
+
+    const messageId = `activity:${runId}`;
+    const activity = getLiveToolActivity(messageId);
+    activity.toolCounts.set(toolName, (activity.toolCounts.get(toolName) ?? 0) + 1);
+  }
+
+  function getLiveToolActivity(messageId: string): LiveToolActivity {
+    const existing = liveToolActivitiesRef.current.get(messageId);
+    if (existing) return existing;
+
+    const created: LiveToolActivity = { toolCounts: new Map(), displayed: false };
+    liveToolActivitiesRef.current.set(messageId, created);
+    return created;
+  }
+
+  function flushLiveToolActivity(runId: string): void {
+    const messageId = `activity:${runId}`;
+    const activity = liveToolActivitiesRef.current.get(messageId);
+    if (!activity || activity.toolCounts.size === 0) return;
+
+    activity.displayed = true;
+    const assistantId = getActiveAssistantMessageId();
+    updateTranscriptMessage(
+      assistantId,
+      () => createAssistantMessage(assistantId, activeAgent, { providerId: activeProviderId }),
+      (message) =>
+        upsertTranscriptPart(message, {
+          id: messageId,
+          type: "status",
+          text: formatToolActivity(activity),
+          tone: "muted",
+        }),
+    );
   }
 
   function getSessionDisplayTitle(listedSession: Session, events: SessionEvent[]): string {
@@ -2831,16 +3227,90 @@ export function AppController() {
   }
 
   function addMessage(content: string, id: string = crypto.randomUUID()): void {
-    addDisplayMessage({ id, content });
+    addTranscriptMessage(createSystemMessage(content, id));
   }
 
-  function addDisplayMessage(message: DisplayMessage): void {
+  function addUserMessage(
+    content: string,
+    id: string = crypto.randomUUID(),
+    agent?: AgentInfo,
+    providerId?: string,
+  ): void {
+    addTranscriptMessage({
+      id,
+      role: "user",
+      agentId: agent?.id,
+      providerId,
+      createdAt: Date.now(),
+      parts: [{ id: `${id}:text`, type: "text", text: content }],
+    });
+  }
+
+  function addTranscriptMessage(message: TranscriptMessage): void {
     setMessages((currentMessages) => [...currentMessages, message]);
     setSelectedMessageId(message.id);
     setTranscriptScrollOffset((offset) =>
-      offset === 0
-        ? 0
-        : offset + getDisplayMessageLineCount(message, expandedMessageIds.has(message.id)),
+      offset === 0 ? 0 : offset + getTranscriptMessageLineCount(message, expandedMessageIds),
+    );
+  }
+
+  function upsertTranscriptMessage(message: TranscriptMessage): void {
+    setMessages((currentMessages) => {
+      const index = currentMessages.findIndex((candidate) => candidate.id === message.id);
+      if (index === -1) return [...currentMessages, message];
+
+      return currentMessages.map((candidate, candidateIndex) =>
+        candidateIndex === index ? { ...candidate, ...message } : candidate,
+      );
+    });
+    setSelectedMessageId(message.id);
+  }
+
+  function updateTranscriptMessage(
+    messageId: string,
+    create: () => TranscriptMessage,
+    update: (message: TranscriptMessage) => TranscriptMessage,
+  ): void {
+    setMessages((currentMessages) => {
+      const index = currentMessages.findIndex((candidate) => candidate.id === messageId);
+      if (index === -1) return [...currentMessages, update(create())];
+
+      return currentMessages.map((candidate, candidateIndex) =>
+        candidateIndex === index ? update(candidate) : candidate,
+      );
+    });
+    setSelectedMessageId(messageId);
+  }
+
+  function completeLatestAssistantMessage(
+    fallbackId: string,
+    finalText: string,
+    agent: AgentInfo,
+    metadata: { providerId?: string; model?: string },
+  ): void {
+    const messageId = activeRunProgressRef.current.runId
+      ? `assistant:${activeRunProgressRef.current.runId}:${activeRunProgressRef.current.lastStepId ?? "final"}`
+      : fallbackId;
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, agent, metadata),
+      (message) => {
+        const hasText = message.parts.some((part) => part.type === "text" && !part.synthetic);
+        const parts =
+          finalText.trim().length > 0 && !hasText
+            ? [
+                ...message.parts,
+                { id: `${messageId}:final-text`, type: "text" as const, text: finalText },
+              ]
+            : message.parts;
+        return {
+          ...message,
+          ...metadata,
+          agentId: agent.id,
+          completedAt: Date.now(),
+          parts,
+        };
+      },
     );
   }
 
@@ -2874,6 +3344,7 @@ export function AppController() {
       questionSelectedOptionIndexes={questionSelectedOptionIndexes}
       queuedPromptCount={queuedPromptsRef.current.length}
       riskLevel={task.riskLevel}
+      runVisualization={runVisualization}
       selectedMessageId={selectedMessageId}
       sessionId={session?.id}
       slashCommandSelectionIndex={slashSelectionIndex}
@@ -2883,6 +3354,453 @@ export function AppController() {
       workspaceRoot={config.workspaceRoot}
     />
   );
+}
+
+function createEmptyRunProgress(): ActiveRunProgress {
+  return {
+    runId: undefined,
+    agentId: undefined,
+    lastStepId: undefined,
+    steps: 0,
+    lastStepStatus: undefined,
+    lastTool: undefined,
+    thinkingStartedAtMs: undefined,
+    toolStatuses: new Map(),
+  };
+}
+
+function createSystemMessage(content: string, id: string = crypto.randomUUID()): TranscriptMessage {
+  return {
+    id,
+    role: "system",
+    createdAt: Date.now(),
+    parts: [{ id: `${id}:status`, type: "status", text: content, tone: "muted" }],
+  };
+}
+
+function createAssistantMessage(
+  id: string,
+  agent: AgentInfo,
+  metadata: { providerId?: string; model?: string } = {},
+): TranscriptMessage {
+  return {
+    id,
+    role: "assistant",
+    agentId: agent.id,
+    providerId: metadata.providerId,
+    model: metadata.model,
+    createdAt: Date.now(),
+    parts: [],
+  };
+}
+
+function upsertTranscriptPart(message: TranscriptMessage, part: TranscriptPart): TranscriptMessage {
+  const index = message.parts.findIndex((candidate) => candidate.id === part.id);
+  if (index === -1) return { ...message, parts: [...message.parts, part] };
+
+  return {
+    ...message,
+    parts: message.parts.map((candidate, candidateIndex) =>
+      candidateIndex === index ? mergeTranscriptPart(candidate, part) : candidate,
+    ),
+  };
+}
+
+function mergeTranscriptPart(existing: TranscriptPart, next: TranscriptPart): TranscriptPart {
+  if (existing.type === "tool" && next.type === "tool") {
+    return {
+      ...existing,
+      ...next,
+      state: {
+        ...existing.state,
+        ...next.state,
+        metadata: { ...existing.state.metadata, ...next.state.metadata },
+        time: {
+          start: existing.state.time.start,
+          end: next.state.time.end ?? existing.state.time.end,
+        },
+      },
+    };
+  }
+  if (existing.type === "reasoning" && next.type === "reasoning") {
+    return {
+      ...existing,
+      ...next,
+      time: { start: existing.time.start, end: next.time.end ?? existing.time.end },
+    };
+  }
+  return next;
+}
+
+type AssistantStreamPayload = Extract<AgentTurnEvent, { type: "assistant_stream" }>["payload"];
+
+function applyAssistantTextStreamPayload(
+  stream: LiveAssistantStream,
+  payload: AssistantStreamPayload,
+): string | undefined {
+  switch (payload.kind) {
+    case "text_delta":
+      stream.text += payload.text;
+      return stream.text;
+    case "reasoning_start":
+      stream.reasoning.set(payload.id, "");
+      return undefined;
+    case "reasoning_delta":
+      stream.reasoning.set(payload.id, `${stream.reasoning.get(payload.id) ?? ""}${payload.text}`);
+      return undefined;
+    case "reasoning_end":
+      return undefined;
+    case "tool_input_start":
+      stream.toolInputs.set(payload.id, { toolName: payload.toolName, input: "" });
+      return undefined;
+    case "tool_input_delta": {
+      const current = stream.toolInputs.get(payload.id) ?? { toolName: "tool", input: "" };
+      stream.toolInputs.set(payload.id, { ...current, input: `${current.input}${payload.delta}` });
+      return undefined;
+    }
+    case "tool_input_end":
+      return undefined;
+    case "tool_call":
+      return undefined;
+    case "finish_step":
+      return undefined;
+  }
+}
+
+function formatToolActivity(activity: LiveToolActivity): string {
+  const parts = [
+    formatToolCount(activity, ["grep", "glob"], "Explored", "search", "searches"),
+    formatToolCount(activity, ["read"], "Read", "file", "files"),
+    formatToolCount(activity, ["task"], "Delegated", "task", "tasks"),
+    formatOtherToolCounts(activity),
+  ].filter((part): part is string => part !== undefined);
+
+  return parts.join("\n");
+}
+
+function formatReasoningPart(
+  stream: LiveAssistantStream,
+  payload: AssistantStreamPayload,
+): TranscriptPart | undefined {
+  if (payload.kind !== "reasoning_delta" && payload.kind !== "reasoning_end") return undefined;
+
+  const id = payload.id;
+  const text = stream.reasoning.get(id)?.trim();
+  if (!text) return undefined;
+
+  return {
+    id: `reasoning:${id}`,
+    type: "reasoning",
+    text,
+    time: { start: Date.now(), ...(payload.kind === "reasoning_end" ? { end: Date.now() } : {}) },
+  };
+}
+
+function formatAssistantStreamToolPart(
+  stream: LiveAssistantStream,
+  payload: AssistantStreamPayload,
+): TranscriptPart | undefined {
+  if (
+    payload.kind !== "tool_input_start" &&
+    payload.kind !== "tool_input_end" &&
+    payload.kind !== "tool_call"
+  ) {
+    return undefined;
+  }
+
+  const inputInfo = stream.toolInputs.get(payload.id);
+  const toolName =
+    payload.kind === "tool_call" ? payload.toolName : (inputInfo?.toolName ?? "tool");
+  const input = payload.kind === "tool_call" ? payload.input : parseJsonInput(inputInfo?.input);
+  const target = formatToolInputTarget(toolName, input);
+
+  return {
+    id: `tool:${payload.id}`,
+    type: "tool",
+    tool: toolName,
+    state: {
+      status: payload.kind === "tool_call" ? "running" : "pending",
+      input,
+      metadata: {
+        ...(target ? { target } : {}),
+        ...(inputInfo?.input ? { preview: truncateOneLine(inputInfo.input) } : {}),
+      },
+      time: { start: Date.now() },
+    },
+  };
+}
+
+function parseJsonInput(value: string | undefined): unknown {
+  if (!value) return undefined;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function formatToolInputTarget(toolName: string, input: unknown): string | undefined {
+  switch (toolName) {
+    case "bash":
+      return readInputString(input, "command");
+    case "read":
+      return readInputString(input, "filePath") ?? readInputString(input, "path");
+    case "grep":
+    case "glob":
+      return readInputString(input, "pattern");
+    case "webfetch":
+      return readInputString(input, "url");
+    case "websearch":
+      return readInputString(input, "query");
+    case "write":
+    case "edit":
+      return readInputString(input, "filePath");
+    case "task":
+      return readInputString(input, "description");
+    default:
+      return undefined;
+  }
+}
+
+function createToolPartFromInput(
+  id: string,
+  toolName: string,
+  input: unknown,
+  status: "pending" | "running",
+  startedAtMs: number,
+): TranscriptPart {
+  const target = formatToolInputTarget(toolName, input);
+  return {
+    id,
+    type: "tool",
+    tool: toolName,
+    state: {
+      status,
+      input,
+      metadata: target ? { target } : undefined,
+      time: { start: startedAtMs },
+    },
+  };
+}
+
+function findToolInput(messages: TranscriptMessage[], toolCallId: string): unknown {
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool" && part.id === `tool:${toolCallId}`) return part.state.input;
+    }
+  }
+
+  return undefined;
+}
+
+function findMatchingToolPartId(
+  message: TranscriptMessage,
+  toolName: string,
+  input: unknown,
+  toolCallId?: string,
+): string {
+  const preferredId = toolCallId === undefined ? undefined : `tool:${toolCallId}`;
+  if (preferredId !== undefined && message.parts.some((part) => part.id === preferredId)) {
+    return preferredId;
+  }
+
+  const matchingPart = message.parts.find(
+    (part): part is Extract<TranscriptPart, { type: "tool" }> =>
+      part.type === "tool" && part.tool === toolName && toolInputsEqual(part.state.input, input),
+  );
+
+  return matchingPart?.id ?? preferredId ?? `tool:${toolName}:${stableStringify(input)}`;
+}
+
+function isSameToolPart(
+  part: TranscriptPart,
+  call: Pick<ToolCall, "id" | "name" | "input">,
+): boolean {
+  if (part.type !== "tool") return false;
+  if (part.id === `tool:${call.id}`) return true;
+  if (part.tool !== call.name) return false;
+
+  return toolInputsEqual(part.state.input, call.input);
+}
+
+function toolInputsEqual(left: unknown, right: unknown): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function formatUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function formatToolCount(
+  activity: LiveToolActivity,
+  toolNames: string[],
+  label: string,
+  singular: string,
+  plural: string,
+): string | undefined {
+  const count = toolNames.reduce(
+    (sum, toolName) => sum + (activity.toolCounts.get(toolName) ?? 0),
+    0,
+  );
+  if (count === 0) return undefined;
+
+  return `${label} ${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatOtherToolCounts(activity: LiveToolActivity): string | undefined {
+  const hidden = new Set(["grep", "glob", "read", "task"]);
+  const count = [...activity.toolCounts]
+    .filter(([toolName]) => !hidden.has(toolName))
+    .reduce((sum, [, toolCount]) => sum + toolCount, 0);
+  if (count === 0) return undefined;
+
+  return `Used ${count} ${count === 1 ? "tool" : "tools"}`;
+}
+
+function formatAssistantStreamStatus(payload: AssistantStreamPayload): string | undefined {
+  switch (payload.kind) {
+    case "text_delta":
+    case "reasoning_delta":
+    case "tool_input_delta":
+      return undefined;
+    case "reasoning_start":
+      return "Thinking - reasoning started";
+    case "reasoning_end":
+      return "Thinking finished";
+    case "tool_input_start":
+      return `Preparing ${payload.toolName}`;
+    case "tool_input_end":
+      return "Tool input ready";
+    case "tool_call":
+      return `Calling ${payload.toolName}`;
+    case "finish_step":
+      return `Model step finished${payload.finishReason ? `: ${payload.finishReason}` : ""}`;
+  }
+}
+
+function formatRunVisualization(progress: ActiveRunProgress): string {
+  if (!progress.runId) return "idle";
+
+  const statuses = [...progress.toolStatuses.values()];
+  const running = statuses.filter((status) => status === "pending" || status === "running").length;
+  const succeeded = statuses.filter((status) => status === "succeeded").length;
+  const failed = statuses.filter((status) => status === "failed" || status === "denied").length;
+  const parts = [
+    `${progress.agentId ?? "agent"}#${progress.runId.slice(0, 8)}`,
+    `step ${progress.steps}`,
+    `tools ${succeeded} ok/${running} active/${failed} failed`,
+  ];
+
+  if (progress.thinkingStartedAtMs !== undefined) {
+    parts.push(`thinking ${formatElapsedSeconds(progress.thinkingStartedAtMs)}`);
+  }
+  if (progress.lastTool) parts.push(`last ${progress.lastTool}`);
+  if (progress.lastStepStatus) parts.push(progress.lastStepStatus);
+
+  return parts.join("  ");
+}
+
+function formatThinkingStatus(progress: ActiveRunProgress): string {
+  if (progress.thinkingStartedAtMs === undefined) {
+    return "Thinking...";
+  }
+
+  const context = progress.lastTool ? ` after ${progress.lastTool}` : "";
+
+  return `Thinking ${formatElapsedSeconds(progress.thinkingStartedAtMs)} - waiting for model${context}`;
+}
+
+function formatToolStatus(
+  toolName: string,
+  status: "pending" | "running" | "succeeded" | "failed" | "denied",
+): string {
+  if (status === "pending" || status === "running") {
+    return `Tool ${toolName} ${status}`;
+  }
+
+  return `Tool ${toolName} ${status}`;
+}
+
+function formatCompletedToolStatus(result: ToolResult, input: unknown, durationMs: number): string {
+  if (!result.ok) return `Tool ${result.name} failed`;
+
+  const output = result.output.trim();
+  if (result.name === "glob" || result.name === "grep") {
+    const count = output.length === 0 ? 0 : output.split("\n").length;
+    return `${result.name} completed: ${count} matches in ${formatDurationMs(durationMs)}`;
+  }
+  if (result.name === "read") {
+    const path = readInputString(input, "path") ?? "file";
+    return `read completed: ${path} in ${formatDurationMs(durationMs)}`;
+  }
+  if (result.name === "todowrite") {
+    return `todos updated in ${formatDurationMs(durationMs)}`;
+  }
+
+  return `${result.name} completed in ${formatDurationMs(durationMs)}`;
+}
+
+function formatProviderErrorDebug(debug: unknown): { summary?: string; detail?: string } {
+  if (!debug || typeof debug !== "object") return {};
+
+  const value = debug as {
+    agentId?: unknown;
+    iteration?: unknown;
+    maxIterations?: unknown;
+    finishReason?: unknown;
+    streamStats?: {
+      textDeltaCount?: unknown;
+      textCharCount?: unknown;
+      reasoningDeltaCount?: unknown;
+      reasoningCharCount?: unknown;
+      toolCallCount?: unknown;
+      toolNames?: unknown;
+      streamPartTypes?: unknown;
+    };
+    toolCalls?: unknown;
+  };
+  const stats = value.streamStats;
+  const toolNames = Array.isArray(stats?.toolNames)
+    ? stats.toolNames.filter((name): name is string => typeof name === "string")
+    : [];
+  const summary = [
+    typeof value.agentId === "string" ? `agent ${value.agentId}` : undefined,
+    typeof value.iteration === "number" && typeof value.maxIterations === "number"
+      ? `step ${value.iteration}/${value.maxIterations}`
+      : undefined,
+    `text ${String(stats?.textDeltaCount ?? 0)} deltas/${String(stats?.textCharCount ?? 0)} chars`,
+    `reasoning ${String(stats?.reasoningDeltaCount ?? 0)} deltas/${String(stats?.reasoningCharCount ?? 0)} chars`,
+    `tools ${String(stats?.toolCallCount ?? 0)}${toolNames.length > 0 ? ` [${toolNames.join(", ")}]` : ""}`,
+    typeof value.finishReason === "string" ? `finish ${value.finishReason}` : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
+
+  return { summary, detail: JSON.stringify(debug, null, 2) };
+}
+
+function formatDurationMs(durationMs: number): string {
+  return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function formatElapsedSeconds(startedAtMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+
+  return `${elapsedSeconds}s`;
 }
 
 function createInitialSession(
@@ -2940,112 +3858,442 @@ function titleFromAssistantMessage(message: string): string | undefined {
   return candidate === undefined ? undefined : truncateTitle(candidate);
 }
 
-function sessionEventsToDisplayMessages(events: SessionEvent[], limit: number): DisplayMessage[] {
-  const displayableMessages = events.flatMap((event): DisplayMessage[] => {
+function sessionEventsToTranscriptMessages(
+  events: SessionEvent[],
+  limit: number,
+): TranscriptMessage[] {
+  const messages: TranscriptMessage[] = [];
+  let currentAssistantId: string | undefined;
+  const reasoningStarts = new Map<string, number>();
+  const reasoningTexts = new Map<string, string>();
+  const toolInputs = new Map<
+    string,
+    { toolName: string; raw: string; input?: unknown; startedAt: number }
+  >();
+
+  const appendSystem = (text: string, id: string) => messages.push(createSystemMessage(text, id));
+  const ensureAssistant = (
+    id: string,
+    payload?: { agentId?: unknown; providerId?: unknown; model?: unknown },
+  ) => {
+    let message = messages.find((candidate) => candidate.id === id);
+    if (!message) {
+      message = {
+        id,
+        role: "assistant",
+        agentId: typeof payload?.agentId === "string" ? payload.agentId : undefined,
+        providerId: typeof payload?.providerId === "string" ? payload.providerId : undefined,
+        model: typeof payload?.model === "string" ? payload.model : undefined,
+        createdAt: Date.parse(
+          events.find((event) => event.id === id)?.createdAt ?? new Date().toISOString(),
+        ),
+        parts: [],
+      };
+      messages.push(message);
+    }
+    currentAssistantId = id;
+    return message;
+  };
+  const updateAssistant = (
+    id: string,
+    part: TranscriptPart,
+    payload?: { agentId?: unknown; providerId?: unknown; model?: unknown },
+  ) => {
+    const message = ensureAssistant(id, payload);
+    const updated = upsertTranscriptPart(message, part);
+    const index = messages.findIndex((candidate) => candidate.id === id);
+    messages[index] = updated;
+  };
+
+  for (const event of events) {
     switch (event.type) {
       case "user_message": {
-        const payload = event.payload as { content?: unknown };
-
-        return typeof payload.content === "string"
-          ? [{ id: `${event.id}-user`, content: `User: ${truncate(payload.content)}` }]
-          : [];
+        const payload = event.payload as {
+          content?: unknown;
+          agentId?: unknown;
+          providerId?: unknown;
+        };
+        if (typeof payload.content !== "string") break;
+        messages.push({
+          id: `${event.id}-user`,
+          role: "user",
+          agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
+          providerId: typeof payload.providerId === "string" ? payload.providerId : undefined,
+          createdAt: Date.parse(event.createdAt),
+          parts: [{ id: `${event.id}-text`, type: "text", text: truncate(payload.content) }],
+        });
+        break;
+      }
+      case "agent_step_started":
+      case "assistant_started": {
+        const payload = event.payload as {
+          runId?: unknown;
+          stepId?: unknown;
+          agentId?: unknown;
+          providerId?: unknown;
+          model?: unknown;
+        };
+        if (typeof payload.runId === "string" && typeof payload.stepId === "string") {
+          ensureAssistant(`assistant:${payload.runId}:${payload.stepId}`, payload);
+        }
+        break;
+      }
+      case "assistant_status": {
+        const payload = event.payload as {
+          runId?: unknown;
+          stepId?: unknown;
+          text?: unknown;
+          kind?: unknown;
+          agentId?: unknown;
+        };
+        if (typeof payload.text !== "string") break;
+        const id =
+          typeof payload.runId === "string" && typeof payload.stepId === "string"
+            ? `assistant:${payload.runId}:${payload.stepId}`
+            : (currentAssistantId ?? event.id);
+        updateAssistant(
+          id,
+          payload.kind === "reasoning"
+            ? {
+                id: `${event.id}:reasoning`,
+                type: "reasoning",
+                text: payload.text,
+                time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
+              }
+            : { id: `${event.id}:status`, type: "status", text: payload.text, tone: "muted" },
+          payload,
+        );
+        break;
+      }
+      case "assistant_stream": {
+        const payload = event.payload as {
+          runId?: unknown;
+          stepId?: unknown;
+          kind?: unknown;
+          id?: unknown;
+          toolName?: unknown;
+          input?: unknown;
+          finishReason?: unknown;
+          agentId?: unknown;
+          text?: unknown;
+          delta?: unknown;
+        };
+        if (typeof payload.runId !== "string" || typeof payload.stepId !== "string") break;
+        const id = `assistant:${payload.runId}:${payload.stepId}`;
+        if (payload.kind === "text_delta" && typeof payload.text === "string") {
+          const message = ensureAssistant(id, payload);
+          const existing = message.parts.find(
+            (part): part is Extract<TranscriptPart, { type: "text" }> =>
+              part.type === "text" && part.id === `${id}:text`,
+          );
+          updateAssistant(
+            id,
+            {
+              id: `${id}:text`,
+              type: "text",
+              text: `${existing?.text ?? ""}${payload.text}`,
+            },
+            payload,
+          );
+        } else if (payload.kind === "reasoning_start" && typeof payload.id === "string") {
+          reasoningStarts.set(payload.id, Date.parse(event.createdAt));
+          reasoningTexts.set(payload.id, "");
+          updateAssistant(
+            id,
+            {
+              id: `reasoning:${payload.id}`,
+              type: "reasoning",
+              text: "",
+              time: { start: Date.parse(event.createdAt) },
+            },
+            payload,
+          );
+        } else if (
+          payload.kind === "reasoning_delta" &&
+          typeof payload.id === "string" &&
+          typeof payload.text === "string"
+        ) {
+          const text = `${reasoningTexts.get(payload.id) ?? ""}${payload.text}`;
+          reasoningTexts.set(payload.id, text);
+          updateAssistant(
+            id,
+            {
+              id: `reasoning:${payload.id}`,
+              type: "reasoning",
+              text,
+              time: { start: reasoningStarts.get(payload.id) ?? Date.parse(event.createdAt) },
+            },
+            payload,
+          );
+        } else if (payload.kind === "reasoning_end" && typeof payload.id === "string") {
+          updateAssistant(
+            id,
+            {
+              id: `reasoning:${payload.id}`,
+              type: "reasoning",
+              text: reasoningTexts.get(payload.id) ?? "",
+              time: {
+                start: reasoningStarts.get(payload.id) ?? Date.parse(event.createdAt),
+                end: Date.parse(event.createdAt),
+              },
+            },
+            payload,
+          );
+        } else if (
+          payload.kind === "tool_input_start" &&
+          typeof payload.id === "string" &&
+          typeof payload.toolName === "string"
+        ) {
+          toolInputs.set(payload.id, {
+            toolName: payload.toolName,
+            raw: "",
+            startedAt: Date.parse(event.createdAt),
+          });
+          updateAssistant(
+            id,
+            createToolPartFromInput(
+              `tool:${payload.id}`,
+              payload.toolName,
+              undefined,
+              "pending",
+              Date.parse(event.createdAt),
+            ),
+            payload,
+          );
+        } else if (
+          payload.kind === "tool_input_delta" &&
+          typeof payload.id === "string" &&
+          typeof payload.delta === "string"
+        ) {
+          const current = toolInputs.get(payload.id) ?? {
+            toolName: "tool",
+            raw: "",
+            startedAt: Date.parse(event.createdAt),
+          };
+          const raw = `${current.raw}${payload.delta}`;
+          const input = parseJsonInput(raw);
+          toolInputs.set(payload.id, { ...current, raw, input });
+          updateAssistant(
+            id,
+            createToolPartFromInput(
+              `tool:${payload.id}`,
+              current.toolName,
+              input,
+              "pending",
+              current.startedAt,
+            ),
+            payload,
+          );
+        } else if (payload.kind === "tool_input_end" && typeof payload.id === "string") {
+          const current = toolInputs.get(payload.id);
+          if (current) {
+            updateAssistant(
+              id,
+              createToolPartFromInput(
+                `tool:${payload.id}`,
+                current.toolName,
+                current.input ?? parseJsonInput(current.raw),
+                "pending",
+                current.startedAt,
+              ),
+              payload,
+            );
+          }
+        } else if (
+          payload.kind === "tool_call" &&
+          typeof payload.id === "string" &&
+          typeof payload.toolName === "string"
+        ) {
+          updateAssistant(
+            id,
+            createToolPartFromInput(
+              `tool:${payload.id}`,
+              payload.toolName,
+              payload.input,
+              "running",
+              Date.parse(event.createdAt),
+            ),
+            payload,
+          );
+        } else if (payload.kind === "finish_step") {
+          updateAssistant(
+            id,
+            {
+              id: `${event.id}:status`,
+              type: "status",
+              text: `model step finished${typeof payload.finishReason === "string" ? `: ${payload.finishReason}` : ""}`,
+              tone: "muted",
+            },
+            payload,
+          );
+        }
+        break;
+      }
+      case "agent_tool_skipped": {
+        const payload = event.payload as {
+          runId?: unknown;
+          stepId?: unknown;
+          toolCallId?: unknown;
+          toolName?: unknown;
+          input?: unknown;
+          reason?: unknown;
+          agentId?: unknown;
+        };
+        if (
+          typeof payload.runId !== "string" ||
+          typeof payload.stepId !== "string" ||
+          typeof payload.toolName !== "string"
+        ) {
+          break;
+        }
+        const assistantId = `assistant:${payload.runId}:${payload.stepId}`;
+        const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : undefined;
+        const message = ensureAssistant(assistantId, payload);
+        updateAssistant(
+          assistantId,
+          {
+            id: findMatchingToolPartId(message, payload.toolName, payload.input, toolCallId),
+            type: "tool",
+            tool: payload.toolName,
+            state: {
+              status: "skipped",
+              input: payload.input,
+              error: typeof payload.reason === "string" ? payload.reason : undefined,
+              title: "skipped repeated action",
+              metadata: {
+                target: formatToolInputTarget(payload.toolName, payload.input),
+                ...(typeof payload.reason === "string" ? { summary: payload.reason } : {}),
+              },
+              time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
+            },
+          },
+          payload,
+        );
+        break;
       }
       case "assistant_message": {
-        const payload = event.payload as { content?: unknown };
-
-        return typeof payload.content === "string"
-          ? [{ id: event.id, content: `Assistant: ${truncate(payload.content)}` }]
-          : [];
-      }
-      case "verification_result": {
-        const payload = event.payload as { command?: unknown; status?: unknown };
-
-        return typeof payload.command === "string" && typeof payload.status === "string"
-          ? [{ id: event.id, content: `verify: ${payload.command}: ${payload.status}` }]
-          : [];
-      }
-      case "tool_settlement": {
-        const payload = event.payload as { name?: unknown; status?: unknown };
-        const name = typeof payload.name === "string" ? payload.name : "tool";
-        const status = typeof payload.status === "string" ? payload.status : "unknown";
-
-        return [{ id: event.id, content: `${name}: ${status}` }];
-      }
-      case "summary": {
-        const payload = event.payload as { text?: unknown };
-
-        return typeof payload.text === "string"
-          ? [{ id: event.id, content: truncate(payload.text) }]
-          : [];
-      }
-      case "model_switch": {
-        const payload = event.payload as { providerId?: unknown; model?: unknown };
-
-        return typeof payload.providerId === "string" && typeof payload.model === "string"
-          ? [{ id: event.id, content: `model: ${payload.providerId} (${payload.model})` }]
-          : [];
-      }
-      case "todo_update": {
-        const todos = readTodosFromPayload(event.payload);
-
-        return [{ id: event.id, content: `todos: ${countOpenTodos(todos)} open` }];
-      }
-      case "task_update": {
         const payload = event.payload as {
-          description?: unknown;
-          status?: unknown;
-          taskId?: unknown;
+          content?: unknown;
+          agentId?: unknown;
+          providerId?: unknown;
+          model?: unknown;
         };
-        const status = typeof payload.status === "string" ? payload.status : "unknown";
-        const description =
-          typeof payload.description === "string" ? truncateOneLine(payload.description) : "task";
-        const taskId = typeof payload.taskId === "string" ? ` (${payload.taskId})` : "";
-
-        return [{ id: event.id, content: `task: ${status}: ${description}${taskId}` }];
+        if (typeof payload.content !== "string") break;
+        const id = currentAssistantId ?? event.id;
+        updateAssistant(
+          id,
+          { id: `${event.id}:text`, type: "text", text: truncate(payload.content) },
+          payload,
+        );
+        const message = messages.find((candidate) => candidate.id === id);
+        if (message) message.completedAt = Date.parse(event.createdAt);
+        break;
       }
-      case "plan_exit": {
-        const payload = event.payload as { accepted?: unknown; planPath?: unknown };
-
-        return [
-          {
-            id: event.id,
-            content: `plan_exit: ${payload.accepted === true ? "accepted" : "continued"} (${String(payload.planPath ?? "plan")})`,
+      case "tool_call": {
+        const payload = event.payload as { id?: unknown; name?: unknown; input?: unknown };
+        if (typeof payload.id !== "string" || typeof payload.name !== "string") break;
+        updateAssistant(
+          currentAssistantId ?? `assistant:${event.id}`,
+          createToolPartFromInput(
+            `tool:${payload.id}`,
+            payload.name,
+            payload.input,
+            "running",
+            Date.parse(event.createdAt),
+          ),
+        );
+        break;
+      }
+      case "tool_result": {
+        const payload = event.payload as {
+          id?: unknown;
+          name?: unknown;
+          ok?: unknown;
+          output?: unknown;
+          error?: unknown;
+        };
+        if (
+          typeof payload.id !== "string" ||
+          typeof payload.name !== "string" ||
+          typeof payload.ok !== "boolean" ||
+          typeof payload.output !== "string"
+        )
+          break;
+        const input = findToolInput(messages, payload.id);
+        const result = {
+          id: payload.id,
+          name: payload.name as ToolResult["name"],
+          ok: payload.ok,
+          output: payload.output,
+          error: typeof payload.error === "string" ? payload.error : undefined,
+        };
+        const summary = formatToolResultSummary(result, input);
+        updateAssistant(currentAssistantId ?? `assistant:${event.id}`, {
+          id: `tool:${payload.id}`,
+          type: "tool",
+          tool: payload.name,
+          state: {
+            status: payload.ok ? "completed" : "error",
+            input,
+            output: payload.ok ? payload.output.trim() : undefined,
+            error: payload.ok
+              ? undefined
+              : typeof payload.error === "string"
+                ? payload.error
+                : payload.output,
+            title: summary.content,
+            metadata: {
+              ...(summary.target ? { target: summary.target } : {}),
+              ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
+              ...(summary.summary ? { summary: summary.summary } : {}),
+              ...(summary.preview ? { preview: summary.preview } : {}),
+            },
+            time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
           },
-        ];
+        });
+        break;
       }
-      default:
-        return [];
+      case "tool_settlement":
+      case "verification_result":
+      case "model_switch":
+      case "todo_update":
+      case "task_update":
+      case "plan_exit":
+      case "summary": {
+        appendSystem(formatEventPayload(event), event.id);
+        break;
+      }
     }
-  });
+  }
 
-  return displayableMessages.slice(-limit);
+  return messages.slice(-limit);
 }
 
 function getTranscriptMaxScrollOffset(
-  messages: DisplayMessage[],
+  messages: TranscriptMessage[],
   expandedIds: Set<string>,
 ): number {
   return Math.max(0, getTranscriptLineCount(messages, expandedIds) - transcriptLineLimit);
 }
 
-function getTranscriptLineCount(messages: DisplayMessage[], expandedIds: Set<string>): number {
+function getTranscriptLineCount(messages: TranscriptMessage[], expandedIds: Set<string>): number {
   return messages.reduce(
-    (count, message) => count + getDisplayMessageLineCount(message, expandedIds.has(message.id)),
+    (count, message) => count + getTranscriptMessageLineCount(message, expandedIds),
     0,
   );
 }
 
 function getTranscriptMessageLineRange(
-  messages: DisplayMessage[],
+  messages: TranscriptMessage[],
   expandedIds: Set<string>,
   messageId: string,
 ): { start: number; end: number } | undefined {
   let start = 0;
 
   for (const message of messages) {
-    const lineCount = getDisplayMessageLineCount(message, expandedIds.has(message.id));
+    const lineCount = getTranscriptMessageLineCount(message, expandedIds);
     const end = start + lineCount;
-    if (message.id === messageId) {
+    if (message.id === messageId || message.parts.some((part) => part.id === messageId)) {
       return { start, end };
     }
 
@@ -3055,27 +4303,74 @@ function getTranscriptMessageLineRange(
   return undefined;
 }
 
-function getDisplayMessageLineCount(message: DisplayMessage, expanded = false): number {
-  const bodyLines = splitDisplayLines(message.content).length;
-  const metadataLines = [
-    message.metadata?.target,
-    message.metadata?.durationMs === undefined ? undefined : String(message.metadata.durationMs),
-    message.metadata?.countLabel,
-    message.metadata?.summary,
-    message.metadata?.preview,
-  ]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .reduce((count, value) => count + splitDisplayLines(value).length, 0);
-  const detailLines =
-    message.expandable && expanded && message.detail ? splitDisplayLines(message.detail).length : 0;
-  const collapsedHintLines = message.expandable && !expanded ? 1 : 0;
+function getTranscriptMessageLineCount(
+  message: TranscriptMessage,
+  expandedIds: Set<string>,
+): number {
+  const spacer = 1;
+  if (message.role === "user" || message.role === "system") {
+    return (
+      spacer +
+      message.parts.reduce(
+        (count, part) => count + getTranscriptPartLineCount(part, expandedIds),
+        0,
+      )
+    );
+  }
 
-  return 2 + bodyLines + metadataLines + detailLines + collapsedHintLines;
+  return (
+    spacer +
+    message.parts.reduce((count, part) => count + getTranscriptPartLineCount(part, expandedIds), 1)
+  );
+}
+
+function getTranscriptPartLineCount(part: TranscriptPart, expandedIds: Set<string>): number {
+  if (part.type === "text") return splitDisplayLines(part.text).length;
+  if (part.type === "status") return splitDisplayLines(part.text).length;
+  if (part.type === "reasoning") {
+    return 1 + (expandedIds.has(part.id) ? splitDisplayLines(part.text).length : 0);
+  }
+
+  const metadataLines = [
+    part.state.metadata?.countLabel,
+    part.state.metadata?.summary,
+    part.state.metadata?.preview,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0).length;
+  const detailLines = expandedIds.has(part.id)
+    ? [part.state.input, part.state.output, part.state.error]
+        .filter((value) => value !== undefined && value !== "")
+        .reduce<number>(
+          (count, value) => count + splitDisplayLines(formatUnknown(value)).length + 1,
+          0,
+        )
+    : 0;
+
+  return 1 + metadataLines + detailLines;
 }
 
 function splitDisplayLines(value: string): string[] {
   const lines = value.split("\n");
   return lines.length === 0 ? [""] : lines;
+}
+
+function getSelectableTranscriptIds(messages: TranscriptMessage[]): string[] {
+  return messages.flatMap((message) => {
+    const ids = [message.id];
+    ids.push(
+      ...message.parts
+        .filter((part) => part.type === "reasoning" || part.type === "tool")
+        .map((part) => part.id),
+    );
+    return ids;
+  });
+}
+
+function isExpandableTranscriptId(messages: TranscriptMessage[], id: string): boolean {
+  return messages.some((message) =>
+    message.parts.some(
+      (part) => (part.type === "reasoning" || part.type === "tool") && part.id === id,
+    ),
+  );
 }
 
 function formatEventPayload(event: SessionEvent): string {
@@ -3120,6 +4415,28 @@ function formatEventPayload(event: SessionEvent): string {
     }
     case "assistant_started":
       return "assistant started";
+    case "assistant_status": {
+      const payload = event.payload as { kind?: unknown; text?: unknown };
+      const kind = typeof payload.kind === "string" ? payload.kind : "status";
+
+      return typeof payload.text === "string" ? `${kind}: ${truncateOneLine(payload.text)}` : kind;
+    }
+    case "assistant_stream": {
+      const payload = event.payload as { kind?: unknown; toolName?: unknown; text?: unknown };
+      const kind = typeof payload.kind === "string" ? payload.kind : "stream";
+      const toolName = typeof payload.toolName === "string" ? ` ${payload.toolName}` : "";
+      const text = typeof payload.text === "string" ? `: ${truncateOneLine(payload.text)}` : "";
+
+      return `${kind}${toolName}${text}`;
+    }
+    case "agent_tool_skipped": {
+      const payload = event.payload as { toolName?: unknown; reason?: unknown };
+      const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
+      const reason =
+        typeof payload.reason === "string" ? `: ${truncateOneLine(payload.reason)}` : "";
+
+      return `${toolName}: skipped${reason}`;
+    }
     case "agent_step_ended": {
       const payload = event.payload as { status?: unknown };
 
@@ -3222,33 +4539,6 @@ type ToolDisplaySummary = {
   summary?: string;
   preview?: string;
 };
-
-function formatToolResultDisplayMessage(
-  result: ToolResult,
-  input: unknown,
-  metadata: { durationMs?: number } = {},
-): DisplayMessage {
-  const summary = formatToolResultSummary(result, input);
-  const detail = result.ok ? result.output.trim() : (result.error ?? result.output).trim();
-  const expandable = detail.length > 0;
-
-  return {
-    id: result.id,
-    kind: result.ok ? "tool" : "error",
-    title: `${result.ok ? "✓" : "✕"} ${result.name}`,
-    content: summary.content,
-    ...(expandable ? { detail, expandable: true, collapsed: true } : {}),
-    tone: result.ok ? "success" : "danger",
-    metadata: {
-      toolName: result.name,
-      ...(metadata.durationMs !== undefined ? { durationMs: metadata.durationMs } : {}),
-      ...(summary.target ? { target: summary.target } : {}),
-      ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
-      ...(summary.summary ? { summary: summary.summary } : {}),
-      ...(summary.preview ? { preview: summary.preview } : {}),
-    },
-  };
-}
 
 function formatToolResultSummary(result: ToolResult, input: unknown): ToolDisplaySummary {
   if (!result.ok) {
