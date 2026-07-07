@@ -22,7 +22,7 @@ export function planSessionMaintenance(input: {
   const latestSummarySequence = Math.max(
     0,
     ...input.events
-      .filter((event) => event.type === "context_summary" || event.type === "summary")
+      .filter((event) => event.type === "context_summary")
       .map((event) => event.sequence),
   );
   const eventsAfterSummary = input.events.filter((event) => event.sequence > latestSummarySequence);

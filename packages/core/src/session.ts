@@ -1,10 +1,10 @@
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { asc, desc, eq, max } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { sessionEvents, sessions } from "./db/schema.js";
 
 export type Session = {
@@ -35,6 +35,7 @@ export type SessionEventType =
   | "verification_result"
   | "context_summary"
   | "queued_user_input"
+  | "agent_switch"
   | "model_switch"
   | "todo_update"
   | "task_update"

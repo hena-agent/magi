@@ -18,7 +18,7 @@ export function compactSessionContext(input: {
   const maxToolOutputCharacters = input.maxToolOutputCharacters ?? 1_000;
   const latestSummary = [...input.events]
     .reverse()
-    .find((event) => event.type === "context_summary" || event.type === "summary");
+    .find((event) => event.type === "context_summary");
   const latestSummarySequence = latestSummary?.sequence ?? 0;
   const recentEvents = input.events
     .filter((event) => event.sequence > latestSummarySequence)
@@ -101,6 +101,10 @@ function formatEvent(event: SessionEvent, maxToolOutputCharacters: number): stri
       return formatTaskUpdate(event.payload);
     case "plan_exit":
       return formatPlanExit(event.payload);
+    case "agent_switch":
+      return [];
+    case "summary":
+      return isLegacyAgentSwitchSummary(event.payload) ? [] : formatWorkspaceSummary(event.payload);
     default:
       return [];
   }
@@ -226,11 +230,39 @@ function formatTaskUpdate(payloadValue: unknown): string[] {
 }
 
 function formatPlanExit(payloadValue: unknown): string[] {
-  const payload = payloadValue as { planFilePath?: unknown; approved?: unknown };
-  const path = typeof payload.planFilePath === "string" ? payload.planFilePath : "plan";
-  const approved = payload.approved === true ? "approved" : "requested";
+  const payload = payloadValue as {
+    planFilePath?: unknown;
+    planPath?: unknown;
+    approved?: unknown;
+    accepted?: unknown;
+  };
+  const path =
+    typeof payload.planFilePath === "string"
+      ? payload.planFilePath
+      : typeof payload.planPath === "string"
+        ? payload.planPath
+        : "plan";
+  const approved =
+    payload.approved === true || payload.accepted === true ? "approved" : "requested";
 
   return [`Plan exit: ${path}: ${approved}`];
+}
+
+function formatWorkspaceSummary(payloadValue: unknown): string[] {
+  const payload = payloadValue as { text?: unknown };
+
+  return typeof payload.text === "string"
+    ? [`Workspace summary:\n${truncateTail(payload.text, 2_000)}`]
+    : [];
+}
+
+function isLegacyAgentSwitchSummary(payloadValue: unknown): boolean {
+  return (
+    typeof payloadValue === "object" &&
+    payloadValue !== null &&
+    !Array.isArray(payloadValue) &&
+    (payloadValue as Record<string, unknown>).agentSwitch === true
+  );
 }
 
 function truncateTail(value: string, maxCharacters: number): string {

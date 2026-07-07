@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "../session.js";
 import { buildAgentSessionContext, buildAgentSystemContext } from "./session-context.js";
 
@@ -58,6 +58,40 @@ describe("buildAgentSessionContext", () => {
   });
 });
 
+describe("buildAgentSessionContext summary event handling", () => {
+  it("does not treat legacy agent switch summaries as context checkpoints", () => {
+    const context = buildAgentSessionContext({
+      events: [
+        event(1, "assistant_message", { content: "Plan: update apps/tui/src/app-controller.tsx" }),
+        event(2, "summary", {
+          text: "Switched agent to build.",
+          agentSwitch: true,
+          agentId: "build",
+        }),
+        event(3, "user_message", { content: "개발해봐" }),
+      ],
+    });
+
+    expect(context).toContain("Assistant: Plan: update apps/tui/src/app-controller.tsx");
+    expect(context).toContain("User: 개발해봐");
+    expect(context).not.toContain("Earlier context summary:\nSwitched agent to build.");
+  });
+
+  it("does not treat workspace summaries as context checkpoints", () => {
+    const context = buildAgentSessionContext({
+      events: [
+        event(1, "assistant_message", { content: "Plan: fix build scripts" }),
+        event(2, "summary", { text: "Changed files:\n- apps/tui/package.json" }),
+        event(3, "user_message", { content: "Continue" }),
+      ],
+    });
+
+    expect(context).toContain("Assistant: Plan: fix build scripts");
+    expect(context).toContain("Workspace summary:\nChanged files:");
+    expect(context).toContain("User: Continue");
+  });
+});
+
 describe("buildAgentSessionContext Phase 3.5 events", () => {
   it("includes session parity events in resumed context", () => {
     const context = buildAgentSessionContext({
@@ -85,6 +119,19 @@ describe("buildAgentSessionContext Phase 3.5 events", () => {
     expect(context).toContain("Task update: Explore runner tests (explore): completed");
     expect(context).toContain("Found missing coverage.");
     expect(context).toContain("Plan exit: .magi/plans/session.md: approved");
+  });
+
+  it("formats current plan_exit payload names", () => {
+    const context = buildAgentSessionContext({
+      events: [
+        event(1, "plan_exit", {
+          planPath: ".magi/plans/current.md",
+          accepted: true,
+        }),
+      ],
+    });
+
+    expect(context).toContain("Plan exit: .magi/plans/current.md: approved");
   });
 });
 

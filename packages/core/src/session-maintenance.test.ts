@@ -35,6 +35,22 @@ describe("planSessionMaintenance", () => {
 
     expect(plan.summaryCandidate).toContain("Meaningful request");
   });
+
+  it("does not treat workspace summaries as maintenance checkpoints", () => {
+    const events = [
+      event(1, "summary", { text: "Changed files:\n- apps/tui/package.json" }),
+      event(2, "user_message", { content: "Meaningful request after summary" }),
+      event(3, "assistant_message", { content: "Important plan after summary" }),
+    ];
+    const plan = planSessionMaintenance({
+      session: session("Real session"),
+      events,
+      minEventsForSummary: 3,
+    });
+
+    expect(plan.summaryCandidate).toContain("Meaningful request after summary");
+    expect(plan.summaryCandidate).toContain("Important plan after summary");
+  });
 });
 
 function session(title: string) {
