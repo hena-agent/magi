@@ -99,6 +99,8 @@
 - Keep the harness backend deterministic where possible; do not use another LLM as a central operator.
 - Store the full decision trail so HITL review can inspect final diff, sandbox logs, review feedback, and votes.
 - Do not auto-accept risky changes without unanimous approval.
+- Before implementing or changing project behavior, consult relevant materials under `docs/` and keep the implementation aligned with documented decisions.
+- After completing work, move or summarize obsolete superseded materials into the appropriate deprecated folder so current documentation and code paths remain easy to find.
 
 ## Development Commands
 - Install dependencies: `pnpm install`
