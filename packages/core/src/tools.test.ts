@@ -19,6 +19,29 @@ it("runs read, glob, and grep tools", async () => {
   ).resolves.toMatchObject({ ok: true, output: "alpha.txt:1: hello magi" });
 });
 
+it("matches brace glob patterns for glob and grep include", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+  mkdirSync(join(workspaceRoot, "src"));
+  writeFileSync(join(workspaceRoot, "src", "app.ts"), "const escapeKey = true;\n");
+  writeFileSync(join(workspaceRoot, "src", "view.tsx"), "export const View = 'Escape';\n");
+  writeFileSync(join(workspaceRoot, "src", "plain.txt"), "Escape should not match include\n");
+
+  const globResult = await runTool(createToolCall("glob", { pattern: "**/*.{ts,tsx,js,jsx}" }), {
+    workspaceRoot,
+  });
+  expect(globResult.ok).toBe(true);
+  expect(globResult.output.split("\n").sort()).toEqual(["src/app.ts", "src/view.tsx"]);
+
+  const grepResult = await runTool(
+    createToolCall("grep", { pattern: "Escape|escape", include: "**/*.{ts,tsx}" }),
+    { workspaceRoot },
+  );
+  expect(grepResult.ok).toBe(true);
+  expect(grepResult.output).toContain("src/app.ts:1: const escapeKey = true;");
+  expect(grepResult.output).toContain("src/view.tsx:1: export const View = 'Escape';");
+  expect(grepResult.output).not.toContain("plain.txt");
+});
+
 it("rejects paths outside the workspace", async () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
   const result = await runTool(createToolCall("read", { path: "../outside.txt" }), {
