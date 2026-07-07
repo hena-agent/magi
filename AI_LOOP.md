@@ -254,13 +254,13 @@ model chooses next tool or final answer
 
 Repeated identical actions are detected and skipped with a recovery observation so the model is nudged to choose a different action or finish.
 
-## Final Step Behavior
+## Max-Iteration Guard Behavior
 
-The loop has a max-iteration budget. On the final step, tools are disabled.
+The loop has a max-iteration guard to prevent runaway tool loops, but regular agent steps keep tools enabled through the guard.
 
-If the model still tries to use a tool at the final step, MAGI records an observation explaining that tools are disabled and asks for a final text-only response from the gathered observations.
+If the guard is exhausted without an `answer` or `finish`, MAGI performs a separate final text-only fallback from the gathered observations.
 
-This avoids ending with a hard failure just because the model wanted one more tool call.
+This keeps OpenCode-style planning tools such as `plan_exit` available during normal agent steps while still avoiding infinite loops.
 
 ## Session Persistence
 

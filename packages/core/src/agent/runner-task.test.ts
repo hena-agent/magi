@@ -3,12 +3,16 @@ import { runEventDrivenAgent } from "./runner.js";
 
 it("preserves background task flag from native tool calls", async () => {
   const actions: unknown[] = [];
+  let stepCalls = 0;
   const result = await runEventDrivenAgent({
     engine: {
       async generateText() {
         return { text: JSON.stringify({ type: "finish", summary: "done" }) };
       },
       async generateStep() {
+        stepCalls += 1;
+        if (stepCalls > 1) return { text: "", toolCalls: [] };
+
         return {
           text: "",
           toolCalls: [

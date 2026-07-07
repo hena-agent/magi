@@ -3,12 +3,16 @@ import { runEventDrivenAgent } from "./runner.js";
 
 it("reports unknown native tool calls as invalid tool observations", async () => {
   const executed: string[] = [];
+  let stepCalls = 0;
   const result = await runEventDrivenAgent({
     engine: {
       async generateText() {
         return { text: JSON.stringify({ type: "finish", summary: "recovered" }) };
       },
       async generateStep() {
+        stepCalls += 1;
+        if (stepCalls > 1) return { text: "", toolCalls: [] };
+
         return {
           text: "",
           toolCalls: [{ id: "tool-1", name: "unknown_tool", input: { path: "README.md" } }],
@@ -34,12 +38,16 @@ it("reports unknown native tool calls as invalid tool observations", async () =>
 
 it("reports malformed native tool inputs as invalid tool observations", async () => {
   const executed: string[] = [];
+  let stepCalls = 0;
   const result = await runEventDrivenAgent({
     engine: {
       async generateText() {
         return { text: JSON.stringify({ type: "finish", summary: "recovered" }) };
       },
       async generateStep() {
+        stepCalls += 1;
+        if (stepCalls > 1) return { text: "", toolCalls: [] };
+
         return {
           text: "",
           toolCalls: [{ id: "tool-1", name: "read", input: { path: 123 } }],

@@ -14,9 +14,22 @@ export const agentTurnSystemPrompt = [
 ].join("\n");
 
 export const nativeToolSystemPrompt = [
-  "You are MAGI running one local coding-agent step.",
-  "Use tools only when needed for the current agent permissions.",
-  "If no tool is needed, answer concisely with the available observations.",
+  "Use the tools available to assist the user.",
+  "Prefer specialized tools over shell for file operations.",
+  "Use Glob to find files by name and Grep to search file contents.",
+  "Use Read when you know the specific file path you need to inspect.",
+  "Run independent tool calls in parallel when neither call needs the other's output.",
+  "For local code questions, inspect directly with focused search/read before delegating to a subagent.",
+  "Do not repeat substantially similar searches; if a search found a likely file or function, read it or answer from it.",
+  "When you have enough information, respond concisely with the concrete finding or next plan.",
+].join("\n");
+
+export const maxStepsPrompt = [
+  "CRITICAL - MAXIMUM STEPS REACHED",
+  "This is the final text-only step.",
+  "The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input.",
+  "Do NOT make tool calls. Respond with text only using the observations already available.",
+  "Include what was accomplished, what remains, and what should happen next.",
 ].join("\n");
 
 export function formatAgentTurnPrompt(input: {
@@ -31,7 +44,7 @@ export function formatAgentTurnPrompt(input: {
   isLastStep: boolean;
 }): string {
   return [
-    `User request: ${formatUserMessageWithReminders(input.agent, input.userMessage)}`,
+    `User request: ${input.userMessage}`,
     "",
     "Prior session context:",
     input.sessionContext === undefined || input.sessionContext.length === 0
@@ -61,9 +74,7 @@ export function buildAgentSystemPrompt(
     agent.id === "plan" ? MAGI_PLAN_REMINDER : undefined,
     ...systemContext,
     protocolPrompt,
-    isLastStep
-      ? "This is the final text-only step. Do not request tools or actions; answer with available observations."
-      : undefined,
+    isLastStep ? maxStepsPrompt : undefined,
   ]
     .filter((part) => part !== undefined && part.length > 0)
     .join("\n\n");
@@ -78,7 +89,7 @@ export function formatNativeToolPrompt(input: {
   maxIterations: number;
 }): string {
   return [
-    `User request: ${formatUserMessageWithReminders(input.agent, input.userMessage)}`,
+    `User request: ${input.userMessage}`,
     "",
     "Prior session context:",
     input.sessionContext === undefined || input.sessionContext.length === 0
@@ -149,13 +160,17 @@ function getExecutableActions(agent: AgentInfo, model: string | undefined) {
       character: 1,
       direction: "both",
     },
-    {
-      type: "task",
-      description: "short task description",
-      prompt: "Detailed instructions for the subagent",
-      subagent_type: agent.id === "plan" ? "explore" : "general",
-      background: false,
-    },
+    ...(agent.id === "plan"
+      ? []
+      : [
+          {
+            type: "task",
+            description: "short task description",
+            prompt: "Detailed instructions for the subagent",
+            subagent_type: "general",
+            background: false,
+          },
+        ]),
     ...(agent.id === "plan"
       ? [
           {
@@ -209,12 +224,4 @@ function getWriteActions(agent: AgentInfo, model: string | undefined) {
         },
         { type: "write", filePath: "relative/path", content: "full file content" },
       ];
-}
-
-function formatUserMessageWithReminders(agent: AgentInfo, userMessage: string): string {
-  if (agent.id !== "plan") {
-    return userMessage;
-  }
-
-  return [userMessage, "", MAGI_PLAN_REMINDER].join("\n");
 }

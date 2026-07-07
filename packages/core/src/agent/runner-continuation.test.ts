@@ -82,7 +82,7 @@ it("requires a final response after the step budget is exhausted", () => {
   ).toEqual({ shouldContinue: true, reason: "final_response_required" });
 });
 
-it("asks for a text-only final answer when max iterations are exhausted", async () => {
+it("keeps tools enabled through the max-iteration guard before final text fallback", async () => {
   const toolsPerStep: number[] = [];
   const result = await runEventDrivenAgent({
     engine: {
@@ -109,8 +109,9 @@ it("asks for a text-only final answer when max iterations are exhausted", async 
     },
   });
 
-  expect(toolsPerStep).toEqual([]);
-  expect(result.status).toBe("completed");
+  expect(toolsPerStep).toHaveLength(1);
+  expect(toolsPerStep[0]).toBeGreaterThan(0);
+  expect(result.status).toBe("max_iterations");
   expect(result.finalText).toBe("final from observations");
 });
 

@@ -6,7 +6,7 @@ import {
 } from "./actions-lsp.js";
 import { readWebsearchAction, type WebsearchAgentAction } from "./actions-websearch.js";
 
-export type AgentAction =
+export type AgentAction = (
   | { type: "answer"; content: string }
   | { type: "read"; path: string }
   | { type: "glob"; pattern: string }
@@ -34,7 +34,8 @@ export type AgentAction =
   | { type: "invalid_tool"; toolName: string; reason: string; input?: unknown }
   | { type: "verify"; command?: string }
   | { type: "propose_patch"; patch: string; summary?: string }
-  | { type: "finish"; summary: string };
+  | { type: "finish"; summary: string }
+) & { toolCallId?: string };
 
 export type ExecutableAgentAction = Exclude<AgentAction, { type: "answer" | "finish" }>;
 

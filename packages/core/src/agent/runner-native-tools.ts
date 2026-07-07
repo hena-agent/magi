@@ -1,3 +1,4 @@
+// biome-ignore lint/style/noExcessiveLinesPerFile: native tool parsing is kept together until schemas move out.
 import type { ModelToolCall } from "../model.js";
 import type { ToolName } from "../tools.js";
 import type { ExecutableAgentAction } from "./actions.js";
@@ -11,8 +12,15 @@ import {
 } from "./runner-native-tool-definitions.js";
 
 export function getNativeToolDefinitions(agent: AgentInfo, model: string | undefined) {
+  const readTools =
+    agent.permission.read === "deny"
+      ? []
+      : agent.id === "plan"
+        ? readNativeToolDefinitions.filter((tool) => tool.name !== "task")
+        : readNativeToolDefinitions;
+
   return [
-    ...(agent.permission.read === "deny" ? [] : readNativeToolDefinitions),
+    ...readTools,
     ...(agent.permission.network === "deny" ? [] : networkNativeToolDefinitions),
     ...(agent.id === "plan" ? editNativeToolDefinitions : []),
     ...(agent.permission.write === "deny"
@@ -46,10 +54,20 @@ export function toolCallToAgentAction(toolCall: ModelToolCall): ExecutableAgentA
   }
 
   try {
-    return readKnownToolCall(toolCall.name, input);
+    return withToolCallId(readKnownToolCall(toolCall.name, input), toolCall.id);
   } catch (error) {
     return invalidToolAction(toolCall, formatError(error));
   }
+}
+
+function withToolCallId<T extends ExecutableAgentAction>(action: T, toolCallId: string): T {
+  Object.defineProperty(action, "toolCallId", {
+    value: toolCallId,
+    enumerable: false,
+    configurable: true,
+  });
+
+  return action;
 }
 
 function readKnownToolCall(name: ToolName, input: Record<string, unknown>): ExecutableAgentAction {
@@ -97,12 +115,15 @@ function readKnownToolCall(name: ToolName, input: Record<string, unknown>): Exec
 }
 
 function invalidToolAction(toolCall: ModelToolCall, reason: string): ExecutableAgentAction {
-  return {
-    type: "invalid_tool",
-    toolName: toolCall.name,
-    reason,
-    input: toolCall.input,
-  };
+  return withToolCallId(
+    {
+      type: "invalid_tool",
+      toolName: toolCall.name,
+      reason,
+      input: toolCall.input,
+    },
+    toolCall.id,
+  );
 }
 
 function isToolName(value: string): value is ToolName {

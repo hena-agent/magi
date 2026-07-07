@@ -57,7 +57,6 @@ export const builtinAgents: Record<string, AgentInfo> = {
     mode: "primary",
     native: true,
     prompt: MAGI_BUILD_PROMPT,
-    steps: 30,
     permission: buildPermission,
   },
   plan: {
@@ -66,7 +65,6 @@ export const builtinAgents: Record<string, AgentInfo> = {
     mode: "primary",
     native: true,
     prompt: MAGI_BUILD_PROMPT,
-    steps: 20,
     permission: readOnlyPermission,
   },
   general: {
@@ -75,7 +73,6 @@ export const builtinAgents: Record<string, AgentInfo> = {
     mode: "subagent",
     native: true,
     prompt: MAGI_BUILD_PROMPT,
-    steps: 30,
     permission: buildPermission,
   },
   explore: {
@@ -84,7 +81,7 @@ export const builtinAgents: Record<string, AgentInfo> = {
     mode: "subagent",
     native: true,
     prompt: MAGI_EXPLORE_PROMPT,
-    steps: 12,
+    steps: 8,
     permission: readOnlyPermission,
   },
   compaction: {
