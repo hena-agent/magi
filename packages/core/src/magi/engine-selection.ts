@@ -9,6 +9,14 @@ export type MagiEngineSelectionConfig = {
   preferFamilyDiversity?: boolean;
 };
 
+export type MagiInitiatorWeights = Record<string, number>;
+
+export type MagiInitiatorSelection = {
+  engine: MagiEngineCandidate;
+  totalWeight: number;
+  weights: MagiInitiatorWeights;
+};
+
 export type MagiEngineCandidate = {
   family: MagiEngineFamily;
   providerId: string;
@@ -30,6 +38,8 @@ export type MagiEnginePoolSelection = {
 
 const defaultMinEngines = 2;
 const defaultMaxEngines = 3;
+const defaultInitiatorWeight = 1;
+const minimumInitiatorWeight = 0.01;
 
 export function selectMagiEngineCandidates(input: {
   providers: ModelProviderSettings[];
@@ -82,6 +92,36 @@ export function inferMagiEngineFamily(
   }
   if (provider.provider === "deepseek") return "deepseek";
   return provider.provider === "custom" ? inferCustomFamily(provider) : provider.provider;
+}
+
+export function selectMagiInitiatingEngine(input: {
+  engines: MagiEngineCandidate[];
+  weights?: MagiInitiatorWeights;
+  random?: () => number;
+}): MagiInitiatorSelection {
+  const readyEngines = input.engines.filter((engine) => engine.ready);
+  const [firstReadyEngine] = readyEngines;
+
+  if (firstReadyEngine === undefined) {
+    throw new Error("MAGI initiator selection requires at least one ready engine.");
+  }
+
+  const weights = normalizeInitiatorWeights(readyEngines, input.weights);
+  const totalWeight = Object.values(weights).reduce((sum, weight) => sum + weight, 0);
+  const random = input.random ?? Math.random;
+  const target = clampRandom(random()) * totalWeight;
+  let cursor = 0;
+  let selectedEngine = firstReadyEngine;
+
+  for (const engine of readyEngines) {
+    selectedEngine = engine;
+    cursor += weights[engine.providerId] ?? minimumInitiatorWeight;
+    if (target < cursor) {
+      return { engine, totalWeight, weights };
+    }
+  }
+
+  return { engine: selectedEngine, totalWeight, weights };
 }
 
 function normalizeSelection(
@@ -179,4 +219,28 @@ function getDefaultApiKeyEnv(provider: ModelProviderSettings["provider"]): strin
     case "custom":
       return undefined;
   }
+}
+
+function normalizeInitiatorWeights(
+  engines: MagiEngineCandidate[],
+  weights: MagiInitiatorWeights | undefined,
+): MagiInitiatorWeights {
+  return Object.fromEntries(
+    engines.map((engine) => {
+      const configuredWeight = weights?.[engine.providerId] ?? defaultInitiatorWeight;
+      const weight =
+        Number.isFinite(configuredWeight) && configuredWeight > 0
+          ? Math.max(configuredWeight, minimumInitiatorWeight)
+          : minimumInitiatorWeight;
+
+      return [engine.providerId, weight];
+    }),
+  );
+}
+
+function clampRandom(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value >= 1) return 1 - Number.EPSILON;
+  return value;
 }
