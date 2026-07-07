@@ -58,6 +58,23 @@ import {
   draftEventsToSessionEvents,
   persistDraftSession,
 } from "./draft-session.js";
+import {
+  addPromptHistoryEntry,
+  clampPromptCursor,
+  deletePreviousPromptWord as deletePreviousPromptWordState,
+  deletePromptCharacter as deletePromptCharacterState,
+  insertPromptText as insertPromptTextState,
+  selectNextPromptHistory,
+  selectPreviousPromptHistory,
+  setPromptText,
+} from "./prompt-state.js";
+import {
+  formatSlashCommandHelp,
+  getSlashCommandSuggestions,
+  type SlashCommandInfo,
+  visibleSlashCommands,
+} from "./slash-commands.js";
+import { normalizeInkInputEvent } from "./tui-key-event.js";
 
 export type TranscriptToolStatus =
   | "pending"
@@ -167,257 +184,6 @@ type AppendSessionEventInput = {
   payload: unknown;
 };
 
-export type SlashCommandInfo = {
-  name: string;
-  usage: string;
-  description: string;
-  category?: string;
-  aliases?: string[];
-  hidden?: boolean;
-};
-
-const slashCommands: SlashCommandInfo[] = [
-  {
-    name: "model",
-    usage: "/model [provider-id|status|reset]",
-    description: "List or switch AI models",
-    category: "Model/Auth",
-  },
-  {
-    name: "mode",
-    usage: "/mode",
-    description: "Show current MAGI mode, agent, model, and session",
-    category: "Workflow",
-  },
-  {
-    name: "auth",
-    usage: "/auth status|login|refresh|logout openai",
-    description: "Manage OpenAI OAuth auth",
-    category: "Model/Auth",
-  },
-  {
-    name: "agent",
-    usage: "/agent [agent-id]",
-    description: "List or switch agents",
-    category: "Agent",
-  },
-  {
-    name: "plan",
-    usage: "/plan [prompt]",
-    description: "Switch to plan agent, optionally run prompt",
-    category: "Agent",
-  },
-  {
-    name: "build",
-    usage: "/build [prompt]",
-    description: "Switch to build agent, optionally run prompt",
-    category: "Agent",
-  },
-  { name: "queue", usage: "/queue", description: "Show queued prompts", category: "Workflow" },
-  {
-    name: "clear_queue",
-    usage: "/clear_queue",
-    description: "Clear queued prompts",
-    category: "Workflow",
-  },
-  {
-    name: "steer",
-    usage: "/steer <message>",
-    description: "Add steering input for the next run",
-    category: "Workflow",
-  },
-  {
-    name: "interrupt",
-    usage: "/interrupt",
-    description: "Stop the current run at the next safe point",
-    category: "Workflow",
-  },
-  {
-    name: "verify",
-    usage: "/verify [command]",
-    description: "Run verification command",
-    category: "Workflow",
-  },
-  {
-    name: "revise",
-    usage: "/revise",
-    description: "Revise from recent verification failures",
-    category: "Workflow",
-  },
-  {
-    name: "summary",
-    usage: "/summary",
-    description: "Summarize the workspace",
-    category: "Session",
-  },
-  {
-    name: "sessions",
-    usage: "/sessions [all]",
-    description: "List recent sessions",
-    category: "Session",
-  },
-  {
-    name: "resume",
-    usage: "/resume <session-id|number>",
-    description: "Resume a saved session",
-    category: "Session",
-  },
-  { name: "new", usage: "/new", description: "Start a new draft session", category: "Session" },
-  {
-    name: "rename",
-    usage: "/rename <title>",
-    description: "Rename the current session",
-    category: "Session",
-  },
-  {
-    name: "history",
-    usage: "/history [limit]",
-    description: "Show session event history",
-    category: "Session",
-  },
-  { name: "read", usage: "/read <path>", description: "Read a workspace file", hidden: true },
-  {
-    name: "glob",
-    usage: "/glob <pattern>",
-    description: "List files matching a glob",
-    hidden: true,
-  },
-  {
-    name: "grep",
-    usage: "/grep <pattern> [include]",
-    description: "Search workspace files",
-    hidden: true,
-  },
-  {
-    name: "webfetch",
-    usage: "/webfetch <url> [format]",
-    description: "Fetch web content",
-    hidden: true,
-  },
-  {
-    name: "websearch",
-    usage: "/websearch [provider] <query>",
-    description: "Search the web with Exa, Parallel, or Brave",
-    hidden: true,
-  },
-  {
-    name: "todowrite",
-    usage: "/todowrite <json>",
-    description: "Update session todo list",
-    hidden: true,
-  },
-  {
-    name: "question",
-    usage: "/question <json>",
-    description: "Ask structured questions",
-    hidden: true,
-  },
-  { name: "skill", usage: "/skill <name>", description: "Load a named skill", hidden: true },
-  {
-    name: "lsp_symbols",
-    usage: "/lsp_symbols <file>",
-    description: "List document symbols",
-    hidden: true,
-  },
-  {
-    name: "lsp_definition",
-    usage: "/lsp_definition <file> <line> <character>",
-    description: "Find symbol definitions",
-    hidden: true,
-  },
-  {
-    name: "lsp_references",
-    usage: "/lsp_references <file> <line> <character>",
-    description: "Find symbol references",
-    hidden: true,
-  },
-  {
-    name: "lsp_hover",
-    usage: "/lsp_hover <file> <line> <character>",
-    description: "Show hover/type info",
-    hidden: true,
-  },
-  {
-    name: "lsp_call_hierarchy",
-    usage: "/lsp_call_hierarchy <file> <line> <character> [incoming|outgoing|both]",
-    description: "Show symbol call hierarchy",
-    hidden: true,
-  },
-  {
-    name: "bash",
-    usage: "/bash <command>",
-    description: "Run a shell command with permission",
-    hidden: true,
-  },
-  {
-    name: "apply_patch",
-    usage: "/apply_patch <patch-file>",
-    description: "Apply a patch file",
-    hidden: true,
-  },
-  {
-    name: "apply_last_patch",
-    usage: "/apply_last_patch",
-    description: "Apply latest proposed patch",
-    hidden: true,
-  },
-  {
-    name: "magi_preview",
-    usage: "/magi_preview",
-    description: "Preview MAGI consensus context",
-    hidden: true,
-  },
-  {
-    name: "maintain_sessions",
-    usage: "/maintain_sessions",
-    description: "Generate missing titles/summaries",
-    hidden: true,
-  },
-  {
-    name: "session_cleanup_candidates",
-    usage: "/session_cleanup_candidates",
-    description: "Show sessions that look safe to clean up",
-    hidden: true,
-  },
-  { name: "help", usage: "/help", description: "Show command list", category: "Workflow" },
-];
-const visibleSlashCommands = slashCommands.filter((command) => command.hidden !== true);
-
-function getSlashCommandSuggestions(input: string): SlashCommandInfo[] {
-  if (!input.startsWith("/")) {
-    return [];
-  }
-
-  const rawQuery = input.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
-  if (rawQuery.length === 0) {
-    return visibleSlashCommands.slice(0, 8);
-  }
-
-  return visibleSlashCommands
-    .filter((command) => {
-      const names = [command.name, ...(command.aliases ?? [])];
-      return names.some((name) => name.toLowerCase().startsWith(rawQuery));
-    })
-    .slice(0, 8);
-}
-
-function formatSlashCommandHelp(commands: SlashCommandInfo[]): string {
-  const categories = ["Session", "Model/Auth", "Agent", "Workflow", "MAGI", "Tools"];
-  const lines = ["Commands:"];
-
-  for (const category of categories) {
-    const categoryCommands = commands.filter(
-      (command) => (command.category ?? "Tools") === category,
-    );
-    if (categoryCommands.length === 0) continue;
-
-    lines.push("", `${category}:`);
-    lines.push(...categoryCommands.map((command) => `${command.usage} - ${command.description}`));
-  }
-
-  return lines.join("\n");
-}
-
 const defaultSessionTitle = "MAGI TUI session";
 const transcriptLineLimit = 28;
 
@@ -525,7 +291,7 @@ export function AppController() {
       : getSlashCommandSuggestions(prompt);
 
   useEffect(() => {
-    setPromptCursor((cursor) => Math.min(cursor, prompt.length));
+    setPromptCursor((cursor) => clampPromptCursor(prompt, cursor));
   }, [prompt.length]);
 
   useEffect(() => {
@@ -574,10 +340,12 @@ export function AppController() {
 
   useInput(
     (input, key) => {
+      const event = normalizeInkInputEvent(input, key);
+
       if (pendingPermission) {
-        if (input.toLowerCase() === "y") {
+        if (event.input.toLowerCase() === "y") {
           void resolvePermission(true);
-        } else if (input.toLowerCase() === "n" || key.escape) {
+        } else if (event.input.toLowerCase() === "n" || event.name === "escape") {
           void resolvePermission(false);
         }
 
@@ -585,12 +353,12 @@ export function AppController() {
       }
 
       if (pendingSelector) {
-        if (key.escape) {
+        if (event.name === "escape") {
           setPendingSelector(undefined);
           return;
         }
 
-        if (key.upArrow) {
+        if (event.name === "up") {
           setPendingSelector((current) =>
             current
               ? {
@@ -605,7 +373,7 @@ export function AppController() {
           return;
         }
 
-        if (key.downArrow) {
+        if (event.name === "down") {
           setPendingSelector((current) =>
             current
               ? { ...current, selectedIndex: (current.selectedIndex + 1) % current.items.length }
@@ -614,7 +382,7 @@ export function AppController() {
           return;
         }
 
-        if (key.return) {
+        if (event.name === "return") {
           const selectedItem = pendingSelector.items[pendingSelector.selectedIndex];
           setPendingSelector(undefined);
           if (selectedItem) {
@@ -630,22 +398,22 @@ export function AppController() {
         const activeQuestion = pendingQuestion.questions[0];
         const optionCount = activeQuestion?.options.length ?? 0;
 
-        if (key.escape) {
+        if (event.name === "escape") {
           resolveQuestion(undefined);
           return;
         }
 
-        if (optionCount > 0 && key.upArrow) {
+        if (optionCount > 0 && event.name === "up") {
           setQuestionOptionIndex((index) => (index <= 0 ? optionCount - 1 : index - 1));
           return;
         }
 
-        if (optionCount > 0 && key.downArrow) {
+        if (optionCount > 0 && event.name === "down") {
           setQuestionOptionIndex((index) => (index + 1) % optionCount);
           return;
         }
 
-        if (optionCount > 0 && input === " ") {
+        if (optionCount > 0 && event.input === " ") {
           if (activeQuestion?.multiple) {
             setQuestionSelectedOptionIndexes((indexes) => {
               const next = new Set(indexes);
@@ -663,35 +431,35 @@ export function AppController() {
           return;
         }
 
-        if (key.return) {
+        if (event.name === "return") {
           resolveQuestion(readPendingQuestionAnswer());
           return;
         }
 
-        if (key.backspace || key.delete) {
+        if (event.name === "backspace" || event.name === "delete") {
           setQuestionAnswer((currentAnswer) => currentAnswer.slice(0, -1));
           return;
         }
 
-        if (input.length > 0 && !key.ctrl && !key.meta) {
-          setQuestionAnswer((currentAnswer) => currentAnswer + input);
+        if (event.input.length > 0) {
+          setQuestionAnswer((currentAnswer) => currentAnswer + event.input);
           setQuestionSelectedOptionIndexes(new Set());
         }
 
         return;
       }
 
-      if ((input === "q" && prompt.length === 0) || (input === "c" && key.ctrl)) {
+      if ((event.input === "q" && prompt.length === 0) || (event.name === "c" && event.ctrl)) {
         exit();
         return;
       }
 
-      if (key.escape) {
+      if (event.name === "escape") {
         requestInterruption();
         return;
       }
 
-      if (key.tab && slashCommandSuggestions.length > 0) {
+      if (event.name === "tab" && slashCommandSuggestions.length > 0) {
         const selected = slashCommandSuggestions[slashSelectionIndex] ?? slashCommandSuggestions[0];
         if (selected) {
           const completed = `/${selected.name} `;
@@ -700,7 +468,7 @@ export function AppController() {
         return;
       }
 
-      if (key.upArrow) {
+      if (event.name === "up") {
         if (slashCommandSuggestions.length > 0) {
           setSlashSelectionIndex((index) =>
             index <= 0 ? slashCommandSuggestions.length - 1 : index - 1,
@@ -711,7 +479,7 @@ export function AppController() {
         return;
       }
 
-      if (key.downArrow) {
+      if (event.name === "down") {
         if (slashCommandSuggestions.length > 0) {
           setSlashSelectionIndex((index) => (index + 1) % slashCommandSuggestions.length);
           return;
@@ -720,73 +488,73 @@ export function AppController() {
         return;
       }
 
-      if (key.pageUp) {
+      if (event.name === "pageup") {
         scrollTranscript(8);
         return;
       }
 
-      if (key.pageDown) {
+      if (event.name === "pagedown") {
         scrollTranscript(-8);
         return;
       }
 
-      if (key.home) {
+      if (event.name === "home") {
         scrollTranscriptToStart();
         return;
       }
 
-      if (key.end) {
+      if (event.name === "end") {
         scrollTranscriptToEnd();
         return;
       }
 
-      if (prompt.length === 0 && input === "k") {
+      if (prompt.length === 0 && event.input === "k") {
         selectTranscriptMessage(-1);
         return;
       }
 
-      if (prompt.length === 0 && input === "j") {
+      if (prompt.length === 0 && event.input === "j") {
         selectTranscriptMessage(1);
         return;
       }
 
-      if (prompt.length === 0 && (input === " " || key.return)) {
+      if (prompt.length === 0 && (event.input === " " || event.name === "return")) {
         toggleSelectedMessageExpansion();
         return;
       }
 
-      if (key.leftArrow || (input === "b" && key.ctrl)) {
+      if (event.name === "left" || (event.name === "b" && event.ctrl)) {
         setPromptCursor((cursor) => Math.max(0, cursor - 1));
         return;
       }
 
-      if (key.rightArrow || (input === "f" && key.ctrl)) {
+      if (event.name === "right" || (event.name === "f" && event.ctrl)) {
         setPromptCursor((cursor) => Math.min(prompt.length, cursor + 1));
         return;
       }
 
-      if (input === "a" && key.ctrl) {
+      if (event.name === "a" && event.ctrl) {
         setPromptCursor(0);
         return;
       }
 
-      if (input === "e" && key.ctrl) {
+      if (event.name === "e" && event.ctrl) {
         setPromptCursor(prompt.length);
         return;
       }
 
-      if (input === "u" && key.ctrl) {
+      if (event.name === "u" && event.ctrl) {
         setPromptWithCursor("");
         promptHistoryIndexRef.current = undefined;
         return;
       }
 
-      if (input === "w" && key.ctrl) {
+      if (event.name === "w" && event.ctrl) {
         deletePreviousPromptWord();
         return;
       }
 
-      if (key.return) {
+      if (event.name === "return") {
         const content = prompt.trim();
 
         if (content.length > 0) {
@@ -798,13 +566,13 @@ export function AppController() {
         return;
       }
 
-      if (key.backspace || key.delete) {
+      if (event.name === "backspace" || event.name === "delete") {
         deletePromptCharacter();
         return;
       }
 
-      if (input.length > 0 && !key.ctrl && !key.meta) {
-        insertPromptText(input);
+      if (event.input.length > 0) {
+        insertPromptText(event.input);
       }
     },
     {
@@ -813,62 +581,55 @@ export function AppController() {
   );
 
   function setPromptWithCursor(nextPrompt: string, nextCursor: number = nextPrompt.length): void {
-    setPrompt(nextPrompt);
-    setPromptCursor(Math.max(0, Math.min(nextPrompt.length, nextCursor)));
+    const next = setPromptText(nextPrompt, nextCursor);
+    setPrompt(next.prompt);
+    setPromptCursor(next.cursor);
     setSlashSelectionIndex(0);
   }
 
   function insertPromptText(text: string): void {
-    const nextPrompt = `${prompt.slice(0, promptCursor)}${text}${prompt.slice(promptCursor)}`;
-    setPromptWithCursor(nextPrompt, promptCursor + text.length);
+    const next = insertPromptTextState({ prompt, cursor: promptCursor }, text);
+    setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
   }
 
   function deletePromptCharacter(): void {
-    if (promptCursor <= 0) return;
-    const nextPrompt = `${prompt.slice(0, promptCursor - 1)}${prompt.slice(promptCursor)}`;
-    setPromptWithCursor(nextPrompt, promptCursor - 1);
+    const next = deletePromptCharacterState({ prompt, cursor: promptCursor });
+    setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
   }
 
   function deletePreviousPromptWord(): void {
-    if (promptCursor <= 0) return;
-    const beforeCursor = prompt.slice(0, promptCursor);
-    const afterCursor = prompt.slice(promptCursor);
-    const trimmedEnd = beforeCursor.replace(/\s+$/, "");
-    const nextBeforeCursor = trimmedEnd.replace(/\S+$/, "");
-    const nextPrompt = `${nextBeforeCursor}${afterCursor}`;
-    setPromptWithCursor(nextPrompt, nextBeforeCursor.length);
+    const next = deletePreviousPromptWordState({ prompt, cursor: promptCursor });
+    setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
   }
 
   function addPromptHistory(content: string): void {
-    promptHistoryRef.current = [
-      ...promptHistoryRef.current.filter((entry) => entry !== content),
-      content,
-    ].slice(-50);
+    promptHistoryRef.current = addPromptHistoryEntry(promptHistoryRef.current, content);
     promptHistoryIndexRef.current = undefined;
   }
 
   function showPreviousPromptHistory(): void {
-    if (promptHistoryRef.current.length === 0) return;
-    const currentIndex = promptHistoryIndexRef.current ?? promptHistoryRef.current.length;
-    const nextIndex = Math.max(0, currentIndex - 1);
-    promptHistoryIndexRef.current = nextIndex;
-    setPromptWithCursor(promptHistoryRef.current[nextIndex] ?? "");
+    const selection = selectPreviousPromptHistory(
+      promptHistoryRef.current,
+      promptHistoryIndexRef.current,
+    );
+    if (!selection) return;
+
+    promptHistoryIndexRef.current = selection.index;
+    setPromptWithCursor(selection.prompt);
   }
 
   function showNextPromptHistory(): void {
-    const currentIndex = promptHistoryIndexRef.current;
-    if (currentIndex === undefined) return;
-    const nextIndex = currentIndex + 1;
-    if (nextIndex >= promptHistoryRef.current.length) {
-      promptHistoryIndexRef.current = undefined;
-      setPromptWithCursor("");
-      return;
-    }
-    promptHistoryIndexRef.current = nextIndex;
-    setPromptWithCursor(promptHistoryRef.current[nextIndex] ?? "");
+    const selection = selectNextPromptHistory(
+      promptHistoryRef.current,
+      promptHistoryIndexRef.current,
+    );
+    if (!selection) return;
+
+    promptHistoryIndexRef.current = selection.index;
+    setPromptWithCursor(selection.prompt);
   }
 
   function scrollTranscript(delta: number): void {

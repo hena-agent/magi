@@ -3,12 +3,12 @@ import type {
   PendingPermission,
   PendingQuestion,
   PendingSelector,
-  SlashCommandInfo,
   TranscriptMessage,
 } from "./app-controller.js";
 import { CommandSuggestions } from "./command-suggestions.js";
 import { Composer } from "./composer.js";
 import { OverlayArea } from "./overlays.js";
+import type { SlashCommandInfo } from "./slash-commands.js";
 import { TranscriptView } from "./transcript-view.js";
 
 type AppViewProps = {

@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import type { SlashCommandInfo } from "./app-controller.js";
+import type { SlashCommandInfo } from "./slash-commands.js";
 
 export function CommandSuggestions(props: {
   commands: SlashCommandInfo[];
