@@ -1,10 +1,11 @@
 // biome-ignore-all lint/complexity/noExcessiveCognitiveComplexity: Legacy interactive controller kept behavior-preserving during app.tsx split.
 // biome-ignore-all lint/complexity/noExcessiveLinesPerFunction: Legacy interactive controller kept behavior-preserving during app.tsx split.
 // biome-ignore-all lint/style/noExcessiveLinesPerFile: Legacy interactive controller kept behavior-preserving during app.tsx split.
-import { loadConfig } from "@magi/config";
-import { runVerificationCommands } from "@magi/harness";
 import { spawn } from "node:child_process";
+import { loadConfig } from "@magi/config";
 import {
+  type AgentInfo,
+  type AgentTurnEvent,
   buildAgentSessionContext,
   buildAgentSystemContext,
   buildRevisionContext,
@@ -14,18 +15,20 @@ import {
   createTask,
   createToolCall,
   createToolSettlement,
+  type EffectiveModelProvider,
+  type ExecutableAgentAction,
   extractFirstDiffBlock,
-  getAuth,
   getAgent,
-  getDefaultModelSelection,
+  getAuth,
   getDefaultAgent,
+  getDefaultModelSelection,
   getEffectiveModelProviderSummaries,
-  getLatestProposedPatch,
   getLatestModelSelection,
-  listEffectiveModelProviders,
-  loadModelsDevCatalog,
+  getLatestProposedPatch,
   getToolPermission,
   listAgents,
+  listEffectiveModelProviders,
+  loadModelsDevCatalog,
   loginOpenAICodexBrowser,
   loginOpenAICodexHeadless,
   MAGI_BUILD_SWITCH_REMINDER,
@@ -35,28 +38,25 @@ import {
   removeAuth,
   runAgentTurn,
   runTool,
-  selectMagiEngineCandidates,
-  selectReviewLenses,
-  summarizeWorkspace,
-  type ExecutableAgentAction,
-  type AgentTurnEvent,
-  type AgentInfo,
-  type EffectiveModelProvider,
   type Session,
   type SessionEvent,
   type SessionEventType,
   type SessionStore,
+  selectMagiEngineCandidates,
+  selectReviewLenses,
+  summarizeWorkspace,
   type ToolCall,
   type ToolResult,
 } from "@magi/core";
+import { runVerificationCommands } from "@magi/harness";
 import { useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { AppView } from "./app-view.js";
 import {
   appendDraftSessionEvent,
+  type DraftSessionEvent,
   draftEventsToSessionEvents,
   persistDraftSession,
-  type DraftSessionEvent,
 } from "./draft-session.js";
 
 export type TranscriptToolStatus =
@@ -681,8 +681,13 @@ export function AppController() {
         return;
       }
 
-      if ((input === "q" && prompt.length === 0) || key.escape || (input === "c" && key.ctrl)) {
+      if ((input === "q" && prompt.length === 0) || (input === "c" && key.ctrl)) {
         exit();
+        return;
+      }
+
+      if (key.escape) {
+        requestInterruption();
         return;
       }
 
@@ -1118,14 +1123,7 @@ export function AppController() {
     }
 
     if (command === "interrupt") {
-      interruptionRequestedRef.current = true;
-      appendSessionEvent({
-        type: "interruption",
-        payload: { reason: "user_cancelled", createdAt: new Date().toISOString() },
-      });
-      addMessage(
-        "Interruption requested. Current provider/tool calls cannot be forcibly aborted yet; the run will stop at the next safe point.",
-      );
+      requestInterruption();
       return;
     }
 
@@ -2708,8 +2706,8 @@ export function AppController() {
 
     setActiveAgent(agent);
     appendSessionEvent({
-      type: "summary",
-      payload: { text: `Switched agent to ${agent.id}.`, agentSwitch: true, agentId: agent.id },
+      type: "agent_switch",
+      payload: { agentId: agent.id, previousAgentId: activeAgent.id },
     });
     addMessage(`Switched agent: ${agent.id}`);
     return agent;
@@ -2836,6 +2834,21 @@ export function AppController() {
       },
     });
     addMessage(`Steering input queued: ${truncateOneLine(content)}`);
+  }
+
+  function requestInterruption(): void {
+    if (interruptionRequestedRef.current) {
+      return;
+    }
+
+    interruptionRequestedRef.current = true;
+    appendSessionEvent({
+      type: "interruption",
+      payload: { reason: "user_cancelled", createdAt: new Date().toISOString() },
+    });
+    addMessage(
+      "Interruption requested. Current provider/tool calls cannot be forcibly aborted yet; the run will stop at the next safe point.",
+    );
   }
 
   async function drainQueuedPrompts(): Promise<void> {
@@ -4255,6 +4268,7 @@ function sessionEventsToTranscriptMessages(
       }
       case "tool_settlement":
       case "verification_result":
+      case "agent_switch":
       case "model_switch":
       case "todo_update":
       case "task_update":
@@ -4478,6 +4492,13 @@ function formatEventPayload(event: SessionEvent): string {
     }
     case "summary":
       return "workspace summary";
+    case "agent_switch": {
+      const payload = event.payload as { agentId?: unknown; previousAgentId?: unknown };
+      const previous =
+        typeof payload.previousAgentId === "string" ? `${payload.previousAgentId} -> ` : "";
+
+      return `agent: ${previous}${String(payload.agentId ?? "unknown")}`;
+    }
     case "model_switch": {
       const payload = event.payload as { providerId?: unknown; model?: unknown };
 
