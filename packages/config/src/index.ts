@@ -34,7 +34,7 @@ const defaultPermissions: PermissionConfig = {
 };
 
 const defaultAgent: AgentConfig = {
-  maxIterations: 30,
+  maxIterations: 200,
 };
 
 const defaultSession: SessionConfig = {

@@ -22,7 +22,7 @@ it("returns defaults when no config file exists", () => {
     "pnpm lint",
     "pnpm knip",
   ]);
-  expect(config.agent).toEqual({ maxIterations: 30 });
+  expect(config.agent).toEqual({ maxIterations: 200 });
   expect(config.session).toEqual({ startup: "new" });
   expect(config.magi).toEqual({
     selection: { minEngines: 2, maxEngines: 3, preferFamilyDiversity: true },
