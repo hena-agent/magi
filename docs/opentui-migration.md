@@ -130,6 +130,8 @@ Done when:
 
 ### Phase 1: Add OpenTUI Baseline
 
+Status: implemented as an experimental Bun-backed entrypoint.
+
 Goal: prove OpenTUI can boot in this repo without touching the agent loop.
 
 Tasks:
@@ -145,12 +147,31 @@ Acceptance checks:
 - `pnpm --filter @magi/tui build` passes.
 - The OpenTUI app starts and exits cleanly.
 
+Current implementation notes:
+
+- `apps/tui/src/opentui-index.tsx` contains the minimal OpenTUI boot screen.
+- `pnpm --filter @magi/tui start:opentui` runs the native OpenTUI renderer with `MAGI_OPENTUI_NATIVE=1`.
+- `pnpm --filter @magi/tui start:opentui:info` builds the package and prints a stable fallback migration baseline.
+- `pnpm --filter @magi/tui start:opentui:native` is an explicit alias for the native renderer path.
+- `pnpm --filter @magi/tui start:opentui:tsx` runs the source entrypoint with Bun.
+- Set `MAGI_OPENTUI_SMOKE=1` to make the OpenTUI boot path render once and exit automatically for smoke verification.
+- The experimental OpenTUI path defaults to `main-screen` with terminal size fallbacks so rendering failures are easier to see while debugging. Set `MAGI_OPENTUI_ALTERNATE_SCREEN=1` to test alternate-screen behavior.
+- Keep `pnpm --filter @magi/tui start` on the existing Ink path until the OpenTUI path reaches feature parity.
+
+Runtime finding:
+
+- OpenTUI 0.4.3 does not currently run cleanly through this repo's Node execution path in this environment. Direct Node execution fails on `@opentui/react` resolving `react-reconciler/constants`, and `tsx` reaches OpenTUI core but fails with `OpenTUI native FFI is not available for this runtime yet`.
+- Bun 1.3.13 can execute the native OpenTUI smoke path in automated command capture, but interactive terminal runs have shown a blank cleared screen on at least one terminal/runtime combination.
+- Future migration work should keep the native OpenTUI renderer behind `MAGI_OPENTUI_NATIVE=1` until interactive rendering is reliable, OpenTUI adds a working Node runtime path, or MAGI adopts a bundling/runtime step that resolves both issues.
+
 Risks:
 
 - OpenTUI native package loading may behave differently across environments.
 - TypeScript JSX configuration may conflict with existing React JSX settings.
 
 ### Phase 2: Introduce Input Event Adapter
+
+Status: in progress. Both the OpenTUI boot path and the current Ink controller now use renderer-independent key event normalization.
 
 Goal: remove direct dependence on Ink `useInput` semantics.
 
@@ -171,6 +192,14 @@ Tasks:
   - printable input inserts text.
 - Add paste handling through OpenTUI `usePaste` once the baseline keyboard path works.
 
+Current implementation notes:
+
+- `apps/tui/src/tui-key-event.ts` defines `TuiKeyEvent`, `normalizeOpenTuiKeyEvent`, and `isExitKey`.
+- `apps/tui/src/tui-key-event.ts` also defines `normalizeInkInputEvent` so the existing Ink controller can move toward the same input path before the renderer is replaced.
+- `apps/tui/src/tui-key-event.test.ts` covers named key normalization, printable input separation, Ink key mapping, and exit key matching.
+- `apps/tui/src/opentui-index.tsx` now exits through the normalized key event path instead of reading OpenTUI key objects directly.
+- `apps/tui/src/app-controller.tsx` still uses Ink `useInput`, but it now normalizes each input through `normalizeInkInputEvent` before dispatching prompt, overlay, selector, transcript, and command shortcuts.
+
 Acceptance checks:
 
 - Existing prompt editing behavior is preserved.
@@ -183,6 +212,8 @@ Risks:
 - Overlay-specific input priority can regress if the event adapter is too generic.
 
 ### Phase 3: Port The Existing View To OpenTUI React
+
+Status: started for the Composer and command suggestion paths. Minimal OpenTUI prompt editing and slash suggestion smoke paths exist in the experimental boot screen.
 
 Goal: preserve the current layout and behavior while changing renderer primitives.
 
@@ -201,6 +232,17 @@ Tasks:
 - Convert `OverlayArea` to OpenTUI JSX.
 - Convert `CommandSuggestions` to OpenTUI JSX.
 - Convert `Composer` to OpenTUI JSX.
+
+Current implementation notes:
+
+- `apps/tui/src/opentui-index.tsx` now renders a minimal prompt editing area using `TuiKeyEvent` and `prompt-state.ts`.
+- `apps/tui/src/opentui-composer.tsx` contains the first OpenTUI-specific component port. It mirrors the current Composer responsibility by rendering prompt text and cursor state without owning input handling.
+- `apps/tui/src/opentui-composer.test.ts` covers prompt cursor preview formatting.
+- `apps/tui/src/opentui-command-suggestions.tsx` mirrors the current command suggestion rendering responsibility for OpenTUI.
+- `apps/tui/src/opentui-command-suggestions.test.ts` covers command suggestion line formatting.
+- The OpenTUI prompt smoke path supports cursor movement, character insertion, character deletion, word deletion, line clearing, submit display, and smoke-mode auto-exit.
+- The OpenTUI slash suggestion smoke path supports showing sample commands, up/down selection, and tab completion without connecting to the real slash command runtime yet.
+- This is not connected to the agent runner yet. It exists to verify the shared input and prompt-state path before porting the real `Composer` and controller view.
 
 Acceptance checks:
 
@@ -377,6 +419,8 @@ The following modules should be extracted from `app-controller.tsx` over time. T
 
 ### Prompt State
 
+Status: extracted for the existing prompt editing and history helpers.
+
 Owns:
 
 - Prompt text.
@@ -390,7 +434,15 @@ Candidate file:
 
 - `apps/tui/src/prompt-state.ts`
 
+Current implementation notes:
+
+- `apps/tui/src/prompt-state.ts` owns pure prompt text, cursor, deletion, insertion, and history selection helpers.
+- `apps/tui/src/prompt-state.test.ts` covers cursor clamping, character insertion/deletion, word deletion, history deduplication, and history navigation.
+- `apps/tui/src/app-controller.tsx` still owns React state, but its prompt editing functions now delegate to `prompt-state.ts`.
+
 ### Slash Command Runtime
+
+Status: metadata, suggestion filtering, and help formatting extracted. Command execution still lives in `app-controller.tsx`.
 
 Owns:
 
@@ -403,6 +455,13 @@ Candidate files:
 
 - `apps/tui/src/slash-commands.ts`
 - `apps/tui/src/slash-command-runtime.ts`
+
+Current implementation notes:
+
+- `apps/tui/src/slash-commands.ts` owns `SlashCommandInfo`, `slashCommands`, `visibleSlashCommands`, `getSlashCommandSuggestions`, and `formatSlashCommandHelp`.
+- `apps/tui/src/slash-commands.test.ts` covers suggestion filtering and help grouping.
+- `apps/tui/src/app-controller.tsx`, the Ink command suggestions view, the OpenTUI command suggestions view, and the OpenTUI boot smoke path now share the same command metadata and suggestion helper.
+- Command execution dispatch is still intentionally left in `app-controller.tsx` for now.
 
 ### Transcript State
 
@@ -507,6 +566,8 @@ Run these checks during the migration:
 ```sh
 pnpm --filter @magi/tui typecheck
 pnpm --filter @magi/tui build
+MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui
+pnpm --filter @magi/tui start:opentui:info
 pnpm --filter @magi/tui test
 pnpm lint
 pnpm knip
