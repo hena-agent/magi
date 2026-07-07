@@ -1,3 +1,5 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { getAuth, isOAuthAuth, type OAuthAuth } from "./auth.js";
 import { OPENAI_CODEX_API_ENDPOINT } from "./openai-codex-oauth-constants.js";
 import { refreshOpenAICodexAuth } from "./openai-codex-oauth-tokens.js";
@@ -14,9 +16,46 @@ export function createOpenAICodexOAuthFetch(input: {
       refreshPromise = promise;
     });
     const headers = authHeaders(auth, init?.headers, input.sessionId);
+    await appendOpenAIRequestLog(input.workspaceRoot, requestInput, init).catch(() => undefined);
 
     return fetch(resolveCodexUrl(requestInput), { ...init, headers });
   };
+}
+
+async function appendOpenAIRequestLog(
+  workspaceRoot: string,
+  requestInput: Parameters<typeof fetch>[0],
+  init: RequestInit | undefined,
+): Promise<void> {
+  const url =
+    requestInput instanceof URL
+      ? requestInput
+      : new URL(typeof requestInput === "string" ? requestInput : requestInput.url);
+  if (!isOpenAIResponsesUrl(url)) return;
+
+  const directory = join(workspaceRoot, ".magi", "debug");
+  await mkdir(directory, { recursive: true });
+  await appendFile(
+    join(directory, "model-raw.ndjson"),
+    `${JSON.stringify({
+      createdAt: new Date().toISOString(),
+      providerId: "openai",
+      provider: "openai",
+      phase: "oauth-request",
+      payload: {
+        url: url.toString(),
+        body: typeof init?.body === "string" ? parseJsonBody(init.body) : "<non-string body>",
+      },
+    })}\n`,
+  );
+}
+
+function parseJsonBody(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
 }
 
 async function resolveAuth(

@@ -48,9 +48,13 @@ export function getToolPermission(toolName: ToolName): ToolPermission {
   return "read";
 }
 
-export function createToolCall(name: ToolName, input: unknown): ToolCall {
+export function createToolCall(
+  name: ToolName,
+  input: unknown,
+  id: string = crypto.randomUUID(),
+): ToolCall {
   return {
-    id: crypto.randomUUID(),
+    id,
     name,
     input,
   };
