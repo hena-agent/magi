@@ -1,5 +1,15 @@
 # OpenTUI Migration Plan
 
+## Current Status: Blocked Reference
+
+This is no longer the active TUI migration plan.
+
+The active plan is `docs/ink-experience-upgrade.md`: keep Ink as MAGI's production renderer and build the OpenCode/OpenTUI-like experience on top of the existing Node + React + Ink stack.
+
+OpenTUI remains in the repository as experimental/reference code only. The native renderer path is blocked because `@opentui/core@0.4.3` cannot initialize its native FFI backend under the current Node runtime. The ESM import issue is shimmed by `apps/tui/src/opentui-node-loader.ts`, but the native renderer still cannot become the production path until OpenTUI supports Node without Bun or unsupported FFI flags.
+
+Do not use this document as the implementation plan for new TUI work. Use it as historical context for the OpenTUI exploration.
+
 ## Purpose
 
 MAGI should move the terminal UI from Ink to OpenTUI because the current TUI is becoming hard to evolve safely. The immediate goal is not a visual redesign. The goal is to regain implementation control while preserving the current daily-driver behavior.
@@ -113,6 +123,23 @@ The `apps/tui/tsconfig.json` may need `jsxImportSource: "@opentui/react"` and co
 
 ## Phased Plan
 
+### Progress Tracker
+
+| Area | Status | Current artifact | Next move |
+| --- | --- | --- | --- |
+| OpenTUI baseline | Done | `apps/tui/src/opentui-info.ts`, `apps/tui/src/opentui-index.tsx` | Keep native renderer behind `MAGI_OPENTUI_NATIVE=1` until Node runtime path works |
+| Input adapter | In progress | `tui-key-event.ts`, `prompt-state.ts`, OpenTUI `usePaste` | Move more controller actions behind renderer-neutral handlers |
+| Composer | Prototype done | `opentui-composer.tsx` | Evaluate native `<input>` / `<textarea>` later |
+| Slash suggestions | Prototype done | `slash-commands.ts`, `opentui-command-suggestions.tsx` | Extract command dispatch from `app-controller.tsx` |
+| Transcript formatting | Done | `transcript-format.ts` | Wire real session messages from the controller |
+| Transcript state | Done | `transcript-state.ts` | Extract more controller actions behind renderer-neutral handlers |
+| Transcript parts | Done | `transcript-parts.ts` | Use shared helpers when extracting session event transcript conversion |
+| OpenTUI transcript view | Prototype done | `opentui-transcript.tsx` | Replace submitted-prompt smoke messages with real session messages |
+| Session initialization | In progress | `tui-session-state.ts`, `opentui-session-boot.ts` | Move full session event to transcript conversion out of `app-controller.tsx` |
+| Overlays | Not started | Ink `overlays.tsx` | Port permission/question/selector after transcript path exists |
+| Agent loop wiring | Not started | Ink `app-controller.tsx` | Extract controller hook/service, then connect OpenTUI entrypoint |
+| Scrollbox | Not started | manual slicing in Ink view | Replace after shared transcript rendering is stable |
+
 ### Phase 0: Document The Migration
 
 Status: this document.
@@ -150,19 +177,20 @@ Acceptance checks:
 Current implementation notes:
 
 - `apps/tui/src/opentui-index.tsx` contains the minimal OpenTUI boot screen.
-- `pnpm --filter @magi/tui start:opentui` runs the native OpenTUI renderer with `MAGI_OPENTUI_NATIVE=1`.
-- `pnpm --filter @magi/tui start:opentui:info` builds the package and prints a stable fallback migration baseline.
-- `pnpm --filter @magi/tui start:opentui:native` is an explicit alias for the native renderer path.
-- `pnpm --filter @magi/tui start:opentui:tsx` runs the source entrypoint with Bun.
+- `pnpm --filter @magi/tui start:opentui` builds the package and prints a stable Node-based migration baseline.
+- `pnpm --filter @magi/tui start:opentui:info` is an explicit alias for the Node-based migration baseline.
+- `pnpm --filter @magi/tui start:opentui:native` attempts the native renderer with Node and `MAGI_OPENTUI_NATIVE=1`.
+- `pnpm --filter @magi/tui start:opentui:tsx` currently aliases the built native renderer path; source-mode OpenTUI execution is deferred until the Node native runtime path is reliable.
 - Set `MAGI_OPENTUI_SMOKE=1` to make the OpenTUI boot path render once and exit automatically for smoke verification.
 - The experimental OpenTUI path defaults to `main-screen` with terminal size fallbacks so rendering failures are easier to see while debugging. Set `MAGI_OPENTUI_ALTERNATE_SCREEN=1` to test alternate-screen behavior.
 - Keep `pnpm --filter @magi/tui start` on the existing Ink path until the OpenTUI path reaches feature parity.
 
 Runtime finding:
 
-- OpenTUI 0.4.3 does not currently run cleanly through this repo's Node execution path in this environment. Direct Node execution fails on `@opentui/react` resolving `react-reconciler/constants`, and `tsx` reaches OpenTUI core but fails with `OpenTUI native FFI is not available for this runtime yet`.
-- Bun 1.3.13 can execute the native OpenTUI smoke path in automated command capture, but interactive terminal runs have shown a blank cleared screen on at least one terminal/runtime combination.
-- Future migration work should keep the native OpenTUI renderer behind `MAGI_OPENTUI_NATIVE=1` until interactive rendering is reliable, OpenTUI adds a working Node runtime path, or MAGI adopts a bundling/runtime step that resolves both issues.
+- OpenTUI 0.4.3 imports `react-reconciler/constants` without the `.js` extension, which Node ESM does not resolve. `apps/tui/src/opentui-node-loader.ts` is a narrow Node ESM loader shim that maps only that specifier to `react-reconciler/constants.js` for native OpenTUI experiments.
+- With the ESM shim in place, native startup advances to OpenTUI core FFI initialization. Node 22.20.0 in this environment does not provide the required native FFI backend (`--experimental-ffi` / `--allow-ffi` are not supported), so native rendering still cannot complete under Node yet. `opentui-index.tsx` catches that renderer initialization failure and exits gracefully with a diagnostic message instead of crashing.
+- Do not use Bun as a project runtime. Previous Bun smoke scripts were removed because MAGI is a Node/pnpm project and Bun cannot load the existing `better-sqlite3` session store backend.
+- Future migration work should keep the native OpenTUI renderer behind `MAGI_OPENTUI_NATIVE=1` until OpenTUI adds a working Node runtime path without the loader shim or MAGI adopts a Node-compatible bundling step.
 
 Risks:
 
@@ -228,7 +256,7 @@ Initial mapping:
 Tasks:
 
 - Convert `AppView` to OpenTUI JSX.
-- Convert `TranscriptView` to OpenTUI JSX while initially preserving the existing line formatter.
+- Convert `TranscriptView` to OpenTUI JSX while preserving the shared line formatter.
 - Convert `OverlayArea` to OpenTUI JSX.
 - Convert `CommandSuggestions` to OpenTUI JSX.
 - Convert `Composer` to OpenTUI JSX.
@@ -240,6 +268,19 @@ Current implementation notes:
 - `apps/tui/src/opentui-composer.test.ts` covers prompt cursor preview formatting.
 - `apps/tui/src/opentui-command-suggestions.tsx` mirrors the current command suggestion rendering responsibility for OpenTUI.
 - `apps/tui/src/opentui-command-suggestions.test.ts` covers command suggestion line formatting.
+- `apps/tui/src/transcript-format.ts` now owns renderer-neutral transcript line formatting used by the Ink `TranscriptView` and ready for OpenTUI reuse.
+- `apps/tui/src/transcript-format.test.ts` covers user, assistant, reasoning, and tool line formatting.
+- `apps/tui/src/transcript-state.ts` now owns renderer-neutral transcript line windows, scroll clamping, selectable IDs, expandability checks, and keep-visible offset calculations.
+- `apps/tui/src/transcript-state.test.ts` covers transcript counts, visible windows, ranges, selection IDs, scroll clamping, and keep-visible behavior.
+- `apps/tui/src/transcript-parts.ts` now owns renderer-neutral transcript part merging, tool input lookup, matching tool part IDs, and stable tool input comparisons used by the Ink controller and future session event transcript extraction.
+- `apps/tui/src/transcript-parts.test.ts` covers tool/reasoning merge semantics, upsert behavior, tool input lookup, matching IDs, and stable comparisons.
+- `apps/tui/src/opentui-transcript.tsx` renders shared transcript lines in the OpenTUI prototype.
+- `apps/tui/src/opentui-index.tsx` now uses the shared transcript state helpers for smoke transcript page scrolling, selection with `j`/`k`, and expansion with `space`/`enter` when the prompt is empty.
+- `apps/tui/src/opentui-transcript-format.ts` contains OpenTUI-specific transcript color mapping and submitted-prompt smoke message helpers.
+- `apps/tui/src/tui-session-state.ts` now owns initial session resume selection, initial model provider selection, system transcript message creation, and the shared session-start transcript message used by both Ink and OpenTUI paths.
+- `apps/tui/src/opentui-session-boot.ts` owns testable OpenTUI session-store bootstrapping and fallback behavior with dependency injection for runtime-specific store failures.
+- `apps/tui/src/opentui-index.tsx` now loads the real MAGI config and attempts to open the session store so the OpenTUI prototype can start from the same draft/resume session state as the Ink controller when the runtime supports the store backend.
+- The native OpenTUI path treats session store initialization as best-effort so renderer experiments do not crash before drawing if a runtime-specific store backend issue appears.
 - The OpenTUI prompt smoke path supports cursor movement, character insertion, character deletion, word deletion, line clearing, submit display, and smoke-mode auto-exit.
 - The OpenTUI slash suggestion smoke path supports showing sample commands, up/down selection, and tab completion without connecting to the real slash command runtime yet.
 - This is not connected to the agent runner yet. It exists to verify the shared input and prompt-state path before porting the real `Composer` and controller view.
@@ -566,7 +607,7 @@ Run these checks during the migration:
 ```sh
 pnpm --filter @magi/tui typecheck
 pnpm --filter @magi/tui build
-MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui
+MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui:native
 pnpm --filter @magi/tui start:opentui:info
 pnpm --filter @magi/tui test
 pnpm lint

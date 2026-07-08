@@ -1,5 +1,9 @@
 # OpenTUI Prototype Spec
 
+## Current Status: Reference Only
+
+This spec is no longer active. OpenTUI native rendering is blocked by Node FFI support in the current environment. The active TUI plan is `docs/ink-experience-upgrade.md`, which keeps Ink as the production renderer and uses OpenTUI prototype work only as design/behavior reference.
+
 ## Purpose
 
 This document defines the next concrete OpenTUI prototype target. It is intentionally smaller than full TUI parity. The goal is to make `pnpm --filter @magi/tui start:opentui` feel like a usable compact landing shell instead of a renderer smoke test.
@@ -87,12 +91,12 @@ pnpm --filter @magi/tui test
 pnpm --filter @magi/tui typecheck
 pnpm --filter @magi/tui build
 pnpm format:check
-MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui
+MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui:native
 ```
 
 Manual checks:
 
-- `pnpm --filter @magi/tui start:opentui` renders a compact centered landing screen.
+- `pnpm --filter @magi/tui start:opentui:native` renders a compact centered landing screen once the Node/OpenTUI runtime path works.
 - Resizing the terminal updates the layout width and height.
 - Typing updates the composer.
 - `enter` updates `last submitted` unless command suggestions are visible.

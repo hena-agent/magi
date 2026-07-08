@@ -113,22 +113,24 @@ For source execution during debugging, use:
 pnpm --filter @magi/tui start:tsx
 ```
 
-An experimental OpenTUI native renderer path is available:
+MAGI currently uses Ink as the primary production TUI renderer. The current UX upgrade plan is documented in `docs/ink-experience-upgrade.md`.
+
+An experimental OpenTUI reference path is available, but native OpenTUI rendering is blocked by OpenTUI core Node FFI support in this environment:
 
 ```sh
 pnpm --filter @magi/tui start:opentui
 ```
 
-To print the current migration baseline without entering native rendering:
+To print the current OpenTUI reference status without entering native rendering:
 
 ```sh
 pnpm --filter @magi/tui start:opentui:info
 ```
 
-For non-interactive smoke verification:
+To retry the native OpenTUI experiment and receive a graceful diagnostic if native FFI is unavailable:
 
 ```sh
-MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui
+MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui:native
 ```
 
 ## Development
