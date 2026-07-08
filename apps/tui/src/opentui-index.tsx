@@ -1,9 +1,10 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /** @jsxImportSource @opentui/react */
 import { createCliRenderer, decodePasteBytes, stripAnsiSequences } from "@opentui/core";
 import { createRoot, useKeyboard, useOnResize, usePaste } from "@opentui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { OpenTuiCommandSuggestions } from "./opentui-command-suggestions.js";
+import { createOpenTuiSessionBoot, type OpenTuiSessionBoot } from "./opentui-session-boot.js";
 import {
   deletePreviousPromptWord,
   deletePromptCharacter,
@@ -13,7 +14,19 @@ import {
 } from "./prompt-state.js";
 import { OpenTuiComposer } from "./opentui-composer.js";
 import { formatSlashCommandCompletion, getSlashCommandSuggestions } from "./slash-commands.js";
+import {
+  clampTranscriptScrollOffset,
+  getTranscriptLineCount,
+  getTranscriptMessageLineCount,
+  isExpandableTranscriptId,
+  keepTranscriptMessageOffsetVisible,
+  selectTranscriptId,
+} from "./transcript-state.js";
+import { createSessionStartMessage } from "./tui-session-state.js";
 import { isExitKey, normalizeOpenTuiKeyEvent } from "./tui-key-event.js";
+import type { TranscriptMessage } from "./app-controller.js";
+import { OpenTuiTranscript } from "./opentui-transcript.js";
+import { createOpenTuiUserPromptMessage } from "./opentui-transcript-format.js";
 
 const colors = {
   accent: "#22d3ee",
@@ -26,6 +39,8 @@ const colors = {
 type OpenTuiTheme = typeof colors & {
   text: string;
 };
+
+type CliRenderer = Awaited<ReturnType<typeof createCliRenderer>>;
 
 type TerminalSize = {
   width: number;
@@ -48,7 +63,7 @@ if (process.env.MAGI_OPENTUI_NATIVE !== "1") {
 const terminalWidth = readTerminalDimension(process.stdout.columns, 80);
 const terminalHeight = readTerminalDimension(process.stdout.rows, 24);
 
-const renderer = await createCliRenderer({
+const rendererResult = await tryCreateOpenTuiRenderer({
   clearOnShutdown: false,
   exitOnCtrlC: false,
   height: terminalHeight,
@@ -56,6 +71,10 @@ const renderer = await createCliRenderer({
     process.env.MAGI_OPENTUI_ALTERNATE_SCREEN === "1" ? "alternate-screen" : "main-screen",
   width: terminalWidth,
 });
+if (!rendererResult) {
+  process.exit(0);
+}
+const renderer = rendererResult;
 const theme: OpenTuiTheme = {
   ...colors,
   text: await detectTerminalTextColor(renderer),
@@ -82,7 +101,18 @@ function readTerminalSize(widthFallback = 80, heightFallback = 24): TerminalSize
   };
 }
 
-async function detectTerminalTextColor(currentRenderer: typeof renderer): Promise<string> {
+async function tryCreateOpenTuiRenderer(
+  options: Parameters<typeof createCliRenderer>[0],
+): Promise<CliRenderer | undefined> {
+  try {
+    return await createCliRenderer(options);
+  } catch (error) {
+    renderNativeUnavailableScreen(error);
+    return undefined;
+  }
+}
+
+async function detectTerminalTextColor(currentRenderer: CliRenderer): Promise<string> {
   if (process.env.MAGI_OPENTUI_TEXT_COLOR) return process.env.MAGI_OPENTUI_TEXT_COLOR;
 
   try {
@@ -126,16 +156,44 @@ process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
 function OpenTuiBootApp() {
+  const [sessionBoot] = useState<OpenTuiSessionBoot>(() => createOpenTuiSessionBoot());
   const [terminalSize, setTerminalSize] = useState<TerminalSize>(() =>
     readTerminalSize(terminalWidth, terminalHeight),
   );
   const [prompt, setPrompt] = useState<PromptState>({ prompt: "", cursor: 0 });
   const [lastSubmittedPrompt, setLastSubmittedPrompt] = useState("(none)");
+  const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>(() => [
+    createSessionStartMessage(sessionBoot.initialSession),
+  ]);
+  const [transcriptScrollOffset, setTranscriptScrollOffset] = useState(0);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(() => new Set());
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const slashSuggestions = getSlashCommandSuggestions(prompt.prompt);
-  const hasSubmittedPrompt = lastSubmittedPrompt !== "(none)";
+  const showTranscript = transcriptMessages.length > 1;
   const isCompact = terminalSize.width < 72 || terminalSize.height < 18;
   const contentWidth = Math.max(24, Math.min(terminalSize.width - 4, isCompact ? 72 : 90));
+  const transcriptLineLimit = Math.max(4, terminalSize.height - (isCompact ? 9 : 12));
+
+  useEffect(() => {
+    return () => {
+      sessionBoot.sessionStore?.close();
+    };
+  }, [sessionBoot.sessionStore]);
+
+  useEffect(() => {
+    setTranscriptScrollOffset((offset) =>
+      clampTranscriptScrollOffset({
+        messages: transcriptMessages,
+        expandedIds: expandedMessageIds,
+        offset,
+        lineLimit: transcriptLineLimit,
+      }),
+    );
+    if (selectedMessageId === undefined && transcriptMessages.length > 0) {
+      setSelectedMessageId(transcriptMessages.at(-1)?.id);
+    }
+  }, [transcriptMessages, expandedMessageIds, selectedMessageId, transcriptLineLimit]);
 
   useOnResize((width, height) => {
     setTerminalSize({
@@ -179,6 +237,62 @@ function OpenTuiBootApp() {
       return;
     }
 
+    if (event.name === "pageup") {
+      setTranscriptScrollOffset((offset) =>
+        clampTranscriptScrollOffset({
+          messages: transcriptMessages,
+          expandedIds: expandedMessageIds,
+          offset: offset + 8,
+          lineLimit: transcriptLineLimit,
+        }),
+      );
+      return;
+    }
+
+    if (event.name === "pagedown") {
+      setTranscriptScrollOffset((offset) =>
+        clampTranscriptScrollOffset({
+          messages: transcriptMessages,
+          expandedIds: expandedMessageIds,
+          offset: offset - 8,
+          lineLimit: transcriptLineLimit,
+        }),
+      );
+      return;
+    }
+
+    if (event.name === "home") {
+      setTranscriptScrollOffset(
+        clampTranscriptScrollOffset({
+          messages: transcriptMessages,
+          expandedIds: expandedMessageIds,
+          offset: getTranscriptLineCount(transcriptMessages, expandedMessageIds),
+          lineLimit: transcriptLineLimit,
+        }),
+      );
+      return;
+    }
+
+    if (event.name === "end") {
+      setTranscriptScrollOffset(0);
+      return;
+    }
+
+    if (prompt.prompt.length === 0 && event.input === "k") {
+      selectOpenTuiTranscriptMessage(-1);
+      return;
+    }
+
+    if (prompt.prompt.length === 0 && event.input === "j") {
+      selectOpenTuiTranscriptMessage(1);
+      return;
+    }
+
+    if (prompt.prompt.length === 0 && (event.input === " " || event.name === "return")) {
+      toggleOpenTuiTranscriptExpansion();
+      return;
+    }
+
     if (event.name === "left" || (event.name === "b" && event.ctrl)) {
       setPrompt((current) => setPromptText(current.prompt, current.cursor - 1));
       return;
@@ -217,7 +331,15 @@ function OpenTuiBootApp() {
     if (event.name === "return") {
       const submitted = prompt.prompt.trim();
       if (submitted.length > 0) {
+        const message = createOpenTuiUserPromptMessage(submitted);
         setLastSubmittedPrompt(submitted);
+        setTranscriptMessages((current) => [...current, message]);
+        setSelectedMessageId(message.id);
+        setTranscriptScrollOffset((offset) =>
+          offset === 0
+            ? 0
+            : offset + getTranscriptMessageLineCount({ message, expandedIds: expandedMessageIds }),
+        );
         setPrompt(setPromptText(""));
         setSlashSelectionIndex(0);
       }
@@ -230,6 +352,60 @@ function OpenTuiBootApp() {
     }
   });
 
+  function selectOpenTuiTranscriptMessage(direction: number): void {
+    const nextMessageId = selectTranscriptId({
+      messages: transcriptMessages,
+      selectedId: selectedMessageId,
+      direction,
+    });
+    if (!nextMessageId) return;
+
+    setSelectedMessageId(nextMessageId);
+    setTranscriptScrollOffset((offset) =>
+      clampTranscriptScrollOffset({
+        messages: transcriptMessages,
+        expandedIds: expandedMessageIds,
+        offset: keepTranscriptMessageOffsetVisible({
+          messages: transcriptMessages,
+          expandedIds: expandedMessageIds,
+          messageId: nextMessageId,
+          offset,
+          lineLimit: transcriptLineLimit,
+        }),
+        lineLimit: transcriptLineLimit,
+      }),
+    );
+  }
+
+  function toggleOpenTuiTranscriptExpansion(): void {
+    if (!selectedMessageId) return;
+    if (!isExpandableTranscriptId(transcriptMessages, selectedMessageId)) return;
+
+    setExpandedMessageIds((expandedIds) => {
+      const next = new Set(expandedIds);
+      if (next.has(selectedMessageId)) {
+        next.delete(selectedMessageId);
+      } else {
+        next.add(selectedMessageId);
+      }
+      setTranscriptScrollOffset((offset) =>
+        clampTranscriptScrollOffset({
+          messages: transcriptMessages,
+          expandedIds: next,
+          offset: keepTranscriptMessageOffsetVisible({
+            messages: transcriptMessages,
+            expandedIds: next,
+            messageId: selectedMessageId,
+            offset,
+            lineLimit: transcriptLineLimit,
+          }),
+          lineLimit: transcriptLineLimit,
+        }),
+      );
+      return next;
+    });
+  }
+
   return (
     <box height={terminalSize.height} width={terminalSize.width} style={{ padding: 1 }}>
       <box
@@ -240,15 +416,24 @@ function OpenTuiBootApp() {
           justifyContent: "center",
         }}
       >
-        {hasSubmittedPrompt ? (
-          <OpenTuiSessionSummary
-            contentWidth={contentWidth}
-            isCompact={isCompact}
-            lastSubmittedPrompt={lastSubmittedPrompt}
-            theme={theme}
+        {showTranscript ? (
+          <OpenTuiTranscript
+            expandedMessageIds={expandedMessageIds}
+            lineLimit={transcriptLineLimit}
+            messages={transcriptMessages}
+            mutedColor={theme.muted}
+            scrollOffset={transcriptScrollOffset}
+            selectedMessageId={selectedMessageId}
+            textColor={theme.text}
+            width={contentWidth}
           />
         ) : (
-          <OpenTuiLanding contentWidth={contentWidth} isCompact={isCompact} theme={theme} />
+          <OpenTuiLanding
+            contentWidth={contentWidth}
+            isCompact={isCompact}
+            sessionStoreError={sessionBoot.sessionStoreError}
+            theme={theme}
+          />
         )}
         <OpenTuiComposer
           prompt={prompt.prompt}
@@ -267,7 +452,7 @@ function OpenTuiBootApp() {
         />
         <OpenTuiFooter
           contentWidth={contentWidth}
-          hasSubmittedPrompt={hasSubmittedPrompt}
+          hasSubmittedPrompt={showTranscript}
           lastSubmittedPrompt={lastSubmittedPrompt}
           theme={theme}
         />
@@ -276,7 +461,12 @@ function OpenTuiBootApp() {
   );
 }
 
-function OpenTuiLanding(props: { contentWidth: number; isCompact: boolean; theme: OpenTuiTheme }) {
+function OpenTuiLanding(props: {
+  contentWidth: number;
+  isCompact: boolean;
+  sessionStoreError: string | undefined;
+  theme: OpenTuiTheme;
+}) {
   return (
     <box
       style={{
@@ -288,6 +478,11 @@ function OpenTuiLanding(props: { contentWidth: number; isCompact: boolean; theme
       <box width={props.contentWidth} style={{ flexDirection: "column", paddingLeft: 1 }}>
         <text fg={props.theme.muted}>Build - GPT-5.5 OpenAI</text>
         <text fg={props.theme.muted}>tab agents ctrl+p commands</text>
+        <text fg={props.sessionStoreError ? props.theme.warning : props.theme.muted}>
+          {props.sessionStoreError
+            ? "workspace session store unavailable in this runtime"
+            : "workspace session state loaded"}
+        </text>
       </box>
       {!props.isCompact && (
         <box width={props.contentWidth} style={{ marginTop: 2, paddingLeft: 1 }}>
@@ -306,28 +501,6 @@ function OpenTuiLogo(props: { theme: OpenTuiTheme }) {
           {line}
         </text>
       ))}
-    </box>
-  );
-}
-
-function OpenTuiSessionSummary(props: {
-  contentWidth: number;
-  isCompact: boolean;
-  lastSubmittedPrompt: string;
-  theme: OpenTuiTheme;
-}) {
-  return (
-    <box
-      width={props.contentWidth}
-      style={{
-        flexDirection: "column",
-        marginBottom: props.isCompact ? 1 : 2,
-        padding: 1,
-      }}
-    >
-      <text fg={props.theme.text}>Last prompt</text>
-      <text fg={props.theme.success}>{props.lastSubmittedPrompt}</text>
-      <text fg={props.theme.muted}>OpenTUI prototype is ready for the next prompt.</text>
     </box>
   );
 }
@@ -358,22 +531,38 @@ function renderFallbackOpenTuiScreen(): void {
   const lines = [
     "MAGI OpenTUI migration baseline",
     "",
-    "This info command does not enter the native OpenTUI renderer because it",
-    "clears the screen without reliably drawing on this terminal/runtime combination.",
-    "",
-    "Run the native renderer with either:",
+    "This file contains the experimental native OpenTUI renderer.",
+    "Use the stable Node info command instead:",
     "  pnpm --filter @magi/tui start:opentui",
-    "or:",
-    "  pnpm --filter @magi/tui start:opentui:native",
     "",
     "Current migration work completed:",
     "  - OpenTUI dependencies installed",
     "  - shared key adapter added",
     "  - prompt-state extracted",
-    "  - OpenTUI Composer and CommandSuggestions components added",
+    "  - OpenTUI Composer, CommandSuggestions, and Transcript components added",
     "",
     "The default daily-driver TUI is still:",
     "  pnpm --filter @magi/tui start",
+  ];
+
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+function renderNativeUnavailableScreen(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const lines = [
+    "MAGI OpenTUI native renderer unavailable",
+    "",
+    "The Node/OpenTUI import shim loaded successfully, but OpenTUI core could not",
+    "initialize its native render library in this runtime.",
+    "",
+    `Reason: ${message}`,
+    "",
+    "The default daily-driver TUI is still:",
+    "  pnpm --filter @magi/tui start",
+    "",
+    "The stable OpenTUI migration status command is:",
+    "  pnpm --filter @magi/tui start:opentui",
   ];
 
   process.stdout.write(`${lines.join("\n")}\n`);
