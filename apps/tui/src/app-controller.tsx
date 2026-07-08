@@ -41,7 +41,6 @@ import {
   type Session,
   type SessionEvent,
   type SessionEventType,
-  type SessionStore,
   selectMagiEngineCandidates,
   selectReviewLenses,
   summarizeWorkspace,
@@ -74,6 +73,27 @@ import {
   type SlashCommandInfo,
   visibleSlashCommands,
 } from "./slash-commands.js";
+import {
+  clampTranscriptScrollOffset as clampTranscriptScrollOffsetState,
+  getTranscriptLineCount,
+  getTranscriptMessageLineCount,
+  isExpandableTranscriptId,
+  keepTranscriptMessageOffsetVisible as keepTranscriptMessageOffsetVisibleState,
+  selectTranscriptId,
+} from "./transcript-state.js";
+import {
+  findMatchingToolPartId,
+  findToolInput,
+  isSameToolPart,
+  upsertTranscriptPart,
+} from "./transcript-parts.js";
+import {
+  createInitialSession,
+  createSessionStartMessage,
+  createSystemMessage,
+  getInitialModelProviderId,
+  type InitialSessionState,
+} from "./tui-session-state.js";
 import { normalizeInkInputEvent } from "./tui-key-event.js";
 
 export type TranscriptToolStatus =
@@ -185,12 +205,6 @@ type AppendSessionEventInput = {
 };
 
 const defaultSessionTitle = "MAGI TUI session";
-const transcriptLineLimit = 28;
-
-type InitialSessionState = {
-  session?: Session;
-  resumed: boolean;
-};
 
 type QueuedPrompt = {
   content: string;
@@ -248,21 +262,7 @@ export function AppController() {
   const promptHistoryIndexRef = useRef<number | undefined>(undefined);
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [messages, setMessages] = useState<TranscriptMessage[]>(() => [
-    {
-      id: "session-start",
-      role: "system",
-      parts: [
-        {
-          id: "session-start:status",
-          type: "status",
-          tone: "muted",
-          text:
-            initialSession.session === undefined
-              ? "Draft session: a session will be saved after the first successful prompt."
-              : `${initialSession.resumed ? "Resumed latest session" : "Started new session"}: ${initialSession.session.id}${initialSession.session.title ? ` (${initialSession.session.title})` : ""}`,
-        },
-      ],
-    },
+    createSessionStartMessage(initialSession),
     ...(initialSession.session === undefined
       ? []
       : sessionEventsToTranscriptMessages(store.listEvents(initialSession.session.id), 30)),
@@ -296,7 +296,7 @@ export function AppController() {
 
   useEffect(() => {
     setTranscriptScrollOffset((offset) =>
-      Math.max(0, Math.min(getTranscriptMaxScrollOffset(messages, expandedMessageIds), offset)),
+      clampTranscriptScrollOffsetState({ messages, expandedIds: expandedMessageIds, offset }),
     );
     if (selectedMessageId === undefined && messages.length > 0) {
       setSelectedMessageId(messages.at(-1)?.id);
@@ -647,18 +647,15 @@ export function AppController() {
   }
 
   function selectTranscriptMessage(direction: number): void {
-    const selectableIds = getSelectableTranscriptIds(messages);
-    if (selectableIds.length === 0) return;
-    const currentIndex = selectedMessageId
-      ? selectableIds.findIndex((id) => id === selectedMessageId)
-      : selectableIds.length - 1;
-    const normalizedIndex = currentIndex === -1 ? selectableIds.length - 1 : currentIndex;
-    const nextIndex = Math.max(0, Math.min(selectableIds.length - 1, normalizedIndex + direction));
-    const nextMessageId = selectableIds[nextIndex];
+    const nextMessageId = selectTranscriptId({
+      messages,
+      selectedId: selectedMessageId,
+      direction,
+    });
+    if (!nextMessageId) return;
+
     setSelectedMessageId(nextMessageId);
-    if (nextMessageId) {
-      keepTranscriptMessageVisible(nextMessageId, expandedMessageIds);
-    }
+    keepTranscriptMessageVisible(nextMessageId, expandedMessageIds);
   }
 
   function toggleSelectedMessageExpansion(): void {
@@ -686,7 +683,7 @@ export function AppController() {
   }
 
   function clampTranscriptScrollOffsetFor(expandedIds: Set<string>, offset: number): number {
-    return Math.max(0, Math.min(getTranscriptMaxScrollOffset(messages, expandedIds), offset));
+    return clampTranscriptScrollOffsetState({ messages, expandedIds, offset });
   }
 
   function keepTranscriptMessageVisible(messageId: string, expandedIds: Set<string>): void {
@@ -702,22 +699,7 @@ export function AppController() {
     expandedIds: Set<string>,
     offset: number,
   ): number {
-    const range = getTranscriptMessageLineRange(messages, expandedIds, messageId);
-    if (!range) return offset;
-
-    const totalLines = getTranscriptLineCount(messages, expandedIds);
-    const visibleEnd = totalLines - offset;
-    const visibleStart = Math.max(0, visibleEnd - transcriptLineLimit);
-
-    if (range.start < visibleStart) {
-      return totalLines - Math.min(totalLines, range.start + transcriptLineLimit);
-    }
-
-    if (range.end > visibleEnd) {
-      return totalLines - range.end;
-    }
-
-    return offset;
+    return keepTranscriptMessageOffsetVisibleState({ messages, expandedIds, messageId, offset });
   }
 
   async function handleSubmittedPrompt(content: string): Promise<void> {
@@ -3024,7 +3006,9 @@ export function AppController() {
     setMessages((currentMessages) => [...currentMessages, message]);
     setSelectedMessageId(message.id);
     setTranscriptScrollOffset((offset) =>
-      offset === 0 ? 0 : offset + getTranscriptMessageLineCount(message, expandedMessageIds),
+      offset === 0
+        ? 0
+        : offset + getTranscriptMessageLineCount({ message, expandedIds: expandedMessageIds }),
     );
   }
 
@@ -3143,15 +3127,6 @@ function createEmptyRunProgress(): ActiveRunProgress {
   };
 }
 
-function createSystemMessage(content: string, id: string = crypto.randomUUID()): TranscriptMessage {
-  return {
-    id,
-    role: "system",
-    createdAt: Date.now(),
-    parts: [{ id: `${id}:status`, type: "status", text: content, tone: "muted" }],
-  };
-}
-
 function createAssistantMessage(
   id: string,
   agent: AgentInfo,
@@ -3166,44 +3141,6 @@ function createAssistantMessage(
     createdAt: Date.now(),
     parts: [],
   };
-}
-
-function upsertTranscriptPart(message: TranscriptMessage, part: TranscriptPart): TranscriptMessage {
-  const index = message.parts.findIndex((candidate) => candidate.id === part.id);
-  if (index === -1) return { ...message, parts: [...message.parts, part] };
-
-  return {
-    ...message,
-    parts: message.parts.map((candidate, candidateIndex) =>
-      candidateIndex === index ? mergeTranscriptPart(candidate, part) : candidate,
-    ),
-  };
-}
-
-function mergeTranscriptPart(existing: TranscriptPart, next: TranscriptPart): TranscriptPart {
-  if (existing.type === "tool" && next.type === "tool") {
-    return {
-      ...existing,
-      ...next,
-      state: {
-        ...existing.state,
-        ...next.state,
-        metadata: { ...existing.state.metadata, ...next.state.metadata },
-        time: {
-          start: existing.state.time.start,
-          end: next.state.time.end ?? existing.state.time.end,
-        },
-      },
-    };
-  }
-  if (existing.type === "reasoning" && next.type === "reasoning") {
-    return {
-      ...existing,
-      ...next,
-      time: { start: existing.time.start, end: next.time.end ?? existing.time.end },
-    };
-  }
-  return next;
 }
 
 type AssistantStreamPayload = Extract<AgentTurnEvent, { type: "assistant_stream" }>["payload"];
@@ -3356,62 +3293,6 @@ function createToolPartFromInput(
       time: { start: startedAtMs },
     },
   };
-}
-
-function findToolInput(messages: TranscriptMessage[], toolCallId: string): unknown {
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.type === "tool" && part.id === `tool:${toolCallId}`) return part.state.input;
-    }
-  }
-
-  return undefined;
-}
-
-function findMatchingToolPartId(
-  message: TranscriptMessage,
-  toolName: string,
-  input: unknown,
-  toolCallId?: string,
-): string {
-  const preferredId = toolCallId === undefined ? undefined : `tool:${toolCallId}`;
-  if (preferredId !== undefined && message.parts.some((part) => part.id === preferredId)) {
-    return preferredId;
-  }
-
-  const matchingPart = message.parts.find(
-    (part): part is Extract<TranscriptPart, { type: "tool" }> =>
-      part.type === "tool" && part.tool === toolName && toolInputsEqual(part.state.input, input),
-  );
-
-  return matchingPart?.id ?? preferredId ?? `tool:${toolName}:${stableStringify(input)}`;
-}
-
-function isSameToolPart(
-  part: TranscriptPart,
-  call: Pick<ToolCall, "id" | "name" | "input">,
-): boolean {
-  if (part.type !== "tool") return false;
-  if (part.id === `tool:${call.id}`) return true;
-  if (part.tool !== call.name) return false;
-
-  return toolInputsEqual(part.state.input, call.input);
-}
-
-function toolInputsEqual(left: unknown, right: unknown): boolean {
-  return stableStringify(left) === stableStringify(right);
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
-      .join(",")}}`;
-  }
-
-  return JSON.stringify(value) ?? "undefined";
 }
 
 function formatUnknown(value: unknown): string {
@@ -3575,38 +3456,6 @@ function formatElapsedSeconds(startedAtMs: number): string {
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
 
   return `${elapsedSeconds}s`;
-}
-
-function createInitialSession(
-  store: SessionStore,
-  config: ReturnType<typeof loadConfig>,
-): InitialSessionState {
-  if (config.session.startup === "resume") {
-    const latestSession = store.getLatestSession({ workspaceRoot: config.workspaceRoot });
-
-    if (latestSession) {
-      return { session: latestSession, resumed: true };
-    }
-  }
-
-  return { resumed: false };
-}
-
-function getInitialModelProviderId(
-  store: SessionStore,
-  initialSession: InitialSessionState,
-  config: ReturnType<typeof loadConfig>,
-): string | undefined {
-  const events = initialSession.session ? store.listEvents(initialSession.session.id) : [];
-  const selection = getLatestModelSelection({
-    events,
-    modelProviders: getEffectiveModelProviderSummaries({
-      configProviders: config.modelProviders,
-      workspaceRoot: config.workspaceRoot,
-    }),
-  });
-
-  return selection?.providerId;
 }
 
 function createSessionTitle(input: { userMessage: string; assistantMessage: string }): string {
@@ -4042,110 +3891,6 @@ function sessionEventsToTranscriptMessages(
   }
 
   return messages.slice(-limit);
-}
-
-function getTranscriptMaxScrollOffset(
-  messages: TranscriptMessage[],
-  expandedIds: Set<string>,
-): number {
-  return Math.max(0, getTranscriptLineCount(messages, expandedIds) - transcriptLineLimit);
-}
-
-function getTranscriptLineCount(messages: TranscriptMessage[], expandedIds: Set<string>): number {
-  return messages.reduce(
-    (count, message) => count + getTranscriptMessageLineCount(message, expandedIds),
-    0,
-  );
-}
-
-function getTranscriptMessageLineRange(
-  messages: TranscriptMessage[],
-  expandedIds: Set<string>,
-  messageId: string,
-): { start: number; end: number } | undefined {
-  let start = 0;
-
-  for (const message of messages) {
-    const lineCount = getTranscriptMessageLineCount(message, expandedIds);
-    const end = start + lineCount;
-    if (message.id === messageId || message.parts.some((part) => part.id === messageId)) {
-      return { start, end };
-    }
-
-    start = end;
-  }
-
-  return undefined;
-}
-
-function getTranscriptMessageLineCount(
-  message: TranscriptMessage,
-  expandedIds: Set<string>,
-): number {
-  const spacer = 1;
-  if (message.role === "user" || message.role === "system") {
-    return (
-      spacer +
-      message.parts.reduce(
-        (count, part) => count + getTranscriptPartLineCount(part, expandedIds),
-        0,
-      )
-    );
-  }
-
-  return (
-    spacer +
-    message.parts.reduce((count, part) => count + getTranscriptPartLineCount(part, expandedIds), 1)
-  );
-}
-
-function getTranscriptPartLineCount(part: TranscriptPart, expandedIds: Set<string>): number {
-  if (part.type === "text") return splitDisplayLines(part.text).length;
-  if (part.type === "status") return splitDisplayLines(part.text).length;
-  if (part.type === "reasoning") {
-    return 1 + (expandedIds.has(part.id) ? splitDisplayLines(part.text).length : 0);
-  }
-
-  const metadataLines = [
-    part.state.metadata?.countLabel,
-    part.state.metadata?.summary,
-    part.state.metadata?.preview,
-  ].filter((value): value is string => typeof value === "string" && value.length > 0).length;
-  const detailLines = expandedIds.has(part.id)
-    ? [part.state.input, part.state.output, part.state.error]
-        .filter((value) => value !== undefined && value !== "")
-        .reduce<number>(
-          (count, value) => count + splitDisplayLines(formatUnknown(value)).length + 1,
-          0,
-        )
-    : 0;
-
-  return 1 + metadataLines + detailLines;
-}
-
-function splitDisplayLines(value: string): string[] {
-  const lines = value.split("\n");
-  return lines.length === 0 ? [""] : lines;
-}
-
-function getSelectableTranscriptIds(messages: TranscriptMessage[]): string[] {
-  return messages.flatMap((message) => {
-    const ids = [message.id];
-    ids.push(
-      ...message.parts
-        .filter((part) => part.type === "reasoning" || part.type === "tool")
-        .map((part) => part.id),
-    );
-    return ids;
-  });
-}
-
-function isExpandableTranscriptId(messages: TranscriptMessage[], id: string): boolean {
-  return messages.some((message) =>
-    message.parts.some(
-      (part) => (part.type === "reasoning" || part.type === "tool") && part.id === id,
-    ),
-  );
 }
 
 function formatEventPayload(event: SessionEvent): string {
