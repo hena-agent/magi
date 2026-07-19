@@ -38,6 +38,10 @@ describe("getSlashCommandSuggestions", () => {
   it("returns no suggestions while command arguments are being typed", () => {
     expect(getSlashCommandSuggestions("/plan write tests")).toEqual([]);
   });
+
+  it("returns no suggestions after multiline slash command input starts", () => {
+    expect(getSlashCommandSuggestions("/plan\nwrite tests")).toEqual([]);
+  });
 });
 
 describe("formatSlashCommandCompletion", () => {

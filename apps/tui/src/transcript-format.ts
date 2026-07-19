@@ -1,4 +1,7 @@
-import type { TranscriptMessage, TranscriptPart } from "./app-controller.js";
+// biome-ignore-all lint/complexity/noExcessiveCognitiveComplexity: Transcript rendering branches by role, part type, and display state.
+// biome-ignore-all lint/complexity/noExcessiveLinesPerFunction: Existing transcript formatting is kept behavior-preserving.
+import { formatToolInputTarget } from "./transcript-tool-display.js";
+import type { TranscriptMessage, TranscriptPart } from "./transcript-types.js";
 
 export type TranscriptLine = {
   id: string;
@@ -36,6 +39,7 @@ export function formatTranscriptMessageLines(input: {
         id: input.message.id,
         text: `${selected ? "›" : " "} │ You`,
         bold: true,
+        color: "cyan",
         selected,
       }),
       ...splitLines(text).map((line) =>
@@ -148,13 +152,16 @@ function formatAssistantPartLines(
         dim:
           part.state.status !== "error" &&
           part.state.status !== "denied" &&
-          part.state.status !== "skipped",
+          part.state.status !== "skipped" &&
+          part.state.status !== "interrupted",
         color:
           part.state.status === "error" || part.state.status === "denied"
             ? "red"
-            : part.state.status === "skipped"
+            : part.state.status === "skipped" || part.state.status === "interrupted"
               ? "yellow"
-              : undefined,
+              : part.state.status === "completed"
+                ? "green"
+                : "cyan",
         selected,
       }),
     ];
@@ -194,6 +201,7 @@ function formatToolSummary(part: Extract<TranscriptPart, { type: "tool" }>): str
   if (status === "skipped") return `${part.tool} skipped${target ? ` ${target}` : ""}`;
   if (status === "error") return `${part.tool} failed${target ? ` ${target}` : ""}`;
   if (status === "denied") return `${part.tool} denied${target ? ` ${target}` : ""}`;
+  if (status === "interrupted") return `${part.tool} interrupted${target ? ` ${target}` : ""}`;
   return `${part.tool} ${part.state.title ?? "completed"}${target ? ` ${target}` : ""}`;
 }
 
@@ -228,32 +236,6 @@ function summarizeReasoning(text: string): { title: string | undefined } {
     ?.trim();
   if (!firstLine) return { title: undefined };
   return { title: firstLine.length > 90 ? `${firstLine.slice(0, 90)}...` : firstLine };
-}
-
-function formatToolInputTarget(toolName: string, input: unknown): string | undefined {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
-  const record = input as Record<string, unknown>;
-  const read = (key: string) => (typeof record[key] === "string" ? String(record[key]) : undefined);
-  switch (toolName) {
-    case "bash":
-      return read("command");
-    case "read":
-      return read("filePath") ?? read("path");
-    case "grep":
-    case "glob":
-      return read("pattern");
-    case "webfetch":
-      return read("url");
-    case "websearch":
-      return read("query");
-    case "write":
-    case "edit":
-      return read("filePath");
-    case "task":
-      return read("description");
-    default:
-      return undefined;
-  }
 }
 
 function toolIcon(tool: string): string {

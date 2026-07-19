@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatOpenTuiCommandSuggestion } from "./opentui-command-suggestions.js";
+import { formatCommandSuggestion } from "./command-suggestions-format.js";
 
-describe("formatOpenTuiCommandSuggestion", () => {
+describe("formatCommandSuggestion", () => {
   it("formats selected command suggestions", () => {
     expect(
-      formatOpenTuiCommandSuggestion(
+      formatCommandSuggestion(
         {
           name: "model",
           usage: "/model [provider-id|status|reset]",
@@ -13,15 +13,15 @@ describe("formatOpenTuiCommandSuggestion", () => {
         },
         true,
       ),
-    ).toBe(" /model        List or switch AI models");
+    ).toBe("› /model        List or switch AI models");
   });
 
   it("formats unselected command suggestions", () => {
     expect(
-      formatOpenTuiCommandSuggestion(
+      formatCommandSuggestion(
         { name: "help", usage: "/help", description: "Show commands" },
         false,
       ),
-    ).toBe(" /help         Show commands");
+    ).toBe("  /help         Show commands");
   });
 });

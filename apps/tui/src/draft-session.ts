@@ -55,3 +55,61 @@ export function persistDraftSession(input: {
 
   return { persisted: true, session, title };
 }
+
+export function createSessionEventJournal(input: {
+  store: SessionStore;
+  initialSession?: Session;
+  createId?: () => string;
+  now?: () => Date;
+}) {
+  let session = input.initialSession;
+  let draftEvents: DraftSessionEvent[] = [];
+
+  return {
+    getSession(): Session | undefined {
+      return session;
+    },
+    getEvents(): SessionEvent[] {
+      return session ? input.store.listEvents(session.id) : draftEventsToSessionEvents(draftEvents);
+    },
+    append(event: AppendDraftSessionEventInput): SessionEvent {
+      if (session) {
+        return input.store.appendEvent({ sessionId: session.id, ...event });
+      }
+
+      const result = appendDraftSessionEvent({
+        draftEvents,
+        event,
+        createId: input.createId,
+        now: input.now,
+      });
+      draftEvents = result.draftEvents;
+      return result.event;
+    },
+    persistDraft(persistInput: {
+      userMessage: string;
+      assistantMessage: string;
+      createTitle: (input: { userMessage: string; assistantMessage: string }) => string;
+    }): { persisted: false } | { persisted: true; session: Session; title: string } {
+      const result = persistDraftSession({
+        session,
+        store: input.store,
+        draftEvents,
+        ...persistInput,
+      });
+      if (result.persisted) {
+        session = result.session;
+        draftEvents = [];
+      }
+      return result;
+    },
+    selectSession(nextSession: Session): void {
+      session = nextSession;
+      draftEvents = [];
+    },
+    resetToDraft(): void {
+      session = undefined;
+      draftEvents = [];
+    },
+  };
+}

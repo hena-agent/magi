@@ -1,13 +1,14 @@
-import { createSessionStore } from "@magi/core";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSessionStore } from "@magi/core";
 import { expect, it } from "vitest";
 import {
   appendDraftSessionEvent,
+  createSessionEventJournal,
+  type DraftSessionEvent,
   draftEventsToSessionEvents,
   persistDraftSession,
-  type DraftSessionEvent,
 } from "./draft-session.js";
 
 it("keeps draft events in memory until first successful persistence", () => {
@@ -62,6 +63,49 @@ it("keeps draft events in memory until first successful persistence", () => {
   }
 });
 
+it("routes events to the persisted session immediately without a render boundary", () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tui-session-journal-"));
+  const store = createSessionStore({ workspaceRoot });
+  const journal = createSessionEventJournal({
+    store,
+    createId: () => "draft-event",
+    now: () => new Date("2026-07-01T00:00:00.000Z"),
+  });
+
+  try {
+    journal.append({ type: "user_message", payload: { content: "First prompt" } });
+    journal.append({ type: "assistant_message", payload: { content: "First answer" } });
+    const persisted = journal.persistDraft({
+      userMessage: "First prompt",
+      assistantMessage: "First answer",
+      createTitle: () => "One session",
+    });
+    expect(persisted.persisted).toBe(true);
+    if (!persisted.persisted) return;
+
+    const queuedEvent = journal.append({
+      type: "user_message",
+      payload: { content: "Queued prompt", source: "queued" },
+    });
+    const secondPersistence = journal.persistDraft({
+      userMessage: "Queued prompt",
+      assistantMessage: "Queued answer",
+      createTitle: () => "Unexpected second session",
+    });
+
+    expect(queuedEvent.sessionId).toBe(persisted.session.id);
+    expect(secondPersistence).toEqual({ persisted: false });
+    expect(store.listSessions({ workspaceRoot })).toHaveLength(1);
+    expect(store.listEvents(persisted.session.id).map((event) => event.type)).toEqual([
+      "user_message",
+      "assistant_message",
+      "user_message",
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
 it("does not create another session when a saved session already exists", () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tui-draft-session-"));
   const store = createSessionStore({ workspaceRoot });
@@ -88,6 +132,29 @@ it("does not create another session when a saved session already exists", () => 
     expect(result).toEqual({ persisted: false });
     expect(store.listSessions({ workspaceRoot })).toHaveLength(1);
     expect(store.listEvents(session.id)).toEqual([]);
+  } finally {
+    store.close();
+  }
+});
+
+it("switches synchronously between persisted and draft event routing", () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tui-session-journal-"));
+  const store = createSessionStore({ workspaceRoot });
+  const session = store.createSession({ title: "Existing" });
+  const journal = createSessionEventJournal({ store, initialSession: session });
+
+  try {
+    expect(journal.append({ type: "summary", payload: { text: "saved" } }).sessionId).toBe(
+      session.id,
+    );
+    journal.resetToDraft();
+    expect(journal.append({ type: "summary", payload: { text: "draft" } }).sessionId).toBe("draft");
+    expect(journal.getEvents()).toHaveLength(1);
+
+    journal.selectSession(session);
+    const resumed = journal.append({ type: "summary", payload: { text: "resumed" } });
+    expect(resumed).toMatchObject({ sessionId: session.id, sequence: 2 });
+    expect(store.listEvents(session.id)).toHaveLength(2);
   } finally {
     store.close();
   }

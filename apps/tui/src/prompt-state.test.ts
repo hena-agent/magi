@@ -25,6 +25,13 @@ describe("prompt state helpers", () => {
     });
   });
 
+  it("preserves multiline pasted text and cursor position", () => {
+    expect(insertPromptText({ prompt: "fix  now", cursor: 4 }, "this\nand")).toEqual({
+      prompt: "fix this\nand now",
+      cursor: 12,
+    });
+  });
+
   it("deletes one character before the cursor", () => {
     expect(deletePromptCharacter({ prompt: "abc", cursor: 2 })).toEqual({
       prompt: "ac",
@@ -36,6 +43,13 @@ describe("prompt state helpers", () => {
     });
   });
 
+  it("deletes across multiline prompt boundaries", () => {
+    expect(deletePromptCharacter({ prompt: "first\nsecond", cursor: 6 })).toEqual({
+      prompt: "firstsecond",
+      cursor: 5,
+    });
+  });
+
   it("deletes the previous word while preserving text after the cursor", () => {
     expect(deletePreviousPromptWord({ prompt: "run   tests now", cursor: 11 })).toEqual({
       prompt: "run    now",
@@ -43,6 +57,13 @@ describe("prompt state helpers", () => {
     });
     expect(deletePreviousPromptWord({ prompt: "run tests   ", cursor: 12 })).toEqual({
       prompt: "run ",
+      cursor: 4,
+    });
+  });
+
+  it("deletes the previous word across multiline whitespace", () => {
+    expect(deletePreviousPromptWord({ prompt: "run tests\nnow", cursor: 10 })).toEqual({
+      prompt: "run now",
       cursor: 4,
     });
   });

@@ -1,25 +1,31 @@
 import { Box, Text } from "ink";
+import { formatCommandSuggestion } from "./command-suggestions-format.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 
 export function CommandSuggestions(props: {
   commands: SlashCommandInfo[];
   selectedIndex: number;
   hidden: boolean;
+  compact?: boolean;
+  limit?: number;
 }) {
   if (props.hidden || props.commands.length === 0) return null;
+  const visibleCommands = props.commands.slice(0, props.limit ?? props.commands.length);
+  const hiddenCount = props.commands.length - visibleCommands.length;
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1}>
-      <Text bold>Commands</Text>
-      {props.commands.map((command, index) => {
+    <Box flexDirection="column" paddingX={2}>
+      {visibleCommands.map((command, index) => {
         const selected = index === props.selectedIndex;
         return (
-          <Text key={command.name} bold={selected}>
-            {`${selected ? "›" : " "} ${command.usage}  [${command.category ?? "Tools"}] ${command.description}`}
+          <Text key={command.name} bold={selected} color={selected ? "cyan" : undefined}>
+            {props.compact
+              ? `${selected ? "›" : " "} /${command.name}  ${command.description}`
+              : formatCommandSuggestion(command, selected)}
           </Text>
         );
       })}
-      <Text dimColor>↑/↓ select tab complete enter run</Text>
+      {hiddenCount > 0 ? <Text dimColor>{`  … ${hiddenCount} more commands`}</Text> : null}
     </Box>
   );
 }

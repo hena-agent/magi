@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptMessage, TranscriptPart } from "./app-controller.js";
 import {
   findMatchingToolPartId,
   findToolInput,
@@ -9,6 +8,7 @@ import {
   toolInputsEqual,
   upsertTranscriptPart,
 } from "./transcript-parts.js";
+import type { TranscriptMessage, TranscriptPart } from "./transcript-types.js";
 
 const toolPart: Extract<TranscriptPart, { type: "tool" }> = {
   id: "tool:call-1",
@@ -22,7 +22,7 @@ const toolPart: Extract<TranscriptPart, { type: "tool" }> = {
   },
 };
 
-describe("transcript part helpers", () => {
+describe("transcript part merging", () => {
   it("merges tool part state without losing original start time or metadata", () => {
     expect(
       mergeTranscriptPart(toolPart, {
@@ -66,6 +66,24 @@ describe("transcript part helpers", () => {
     });
   });
 
+  it("does not regress a settled tool when an earlier lifecycle event arrives late", () => {
+    const completed: Extract<TranscriptPart, { type: "tool" }> = {
+      ...toolPart,
+      state: {
+        ...toolPart.state,
+        status: "completed",
+        output: "ok",
+        time: { start: 1_000, end: 2_000 },
+      },
+    };
+
+    expect(mergeTranscriptPart(completed, toolPart)).toMatchObject({
+      state: { status: "completed", output: "ok", time: { start: 1_000, end: 2_000 } },
+    });
+  });
+});
+
+describe("transcript part lookup", () => {
   it("upserts transcript parts by id", () => {
     const message: TranscriptMessage = { id: "assistant-1", role: "assistant", parts: [toolPart] };
 

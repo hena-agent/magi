@@ -1,8 +1,9 @@
+// biome-ignore-all lint/complexity/noExcessiveLinesPerFunction: Rendering variants stay grouped by transcript part type.
 import { describe, expect, it } from "vitest";
-import type { TranscriptMessage } from "./app-controller.js";
 import { formatTranscriptMessageLines } from "./transcript-format.js";
+import type { TranscriptMessage } from "./transcript-types.js";
 
-describe("formatTranscriptMessageLines", () => {
+describe("formatTranscriptMessageLines messages", () => {
   it("formats user messages", () => {
     const message: TranscriptMessage = {
       id: "user-1",
@@ -40,7 +41,9 @@ describe("formatTranscriptMessageLines", () => {
       }).map((line) => line.text),
     ).toEqual(["  Done", "  ▣ build · gpt-test · 1.5s"]);
   });
+});
 
+describe("formatTranscriptMessageLines reasoning", () => {
   it("formats collapsed and expanded reasoning parts", () => {
     const message: TranscriptMessage = {
       id: "assistant-2",
@@ -78,7 +81,9 @@ describe("formatTranscriptMessageLines", () => {
       "  ▣ assistant",
     ]);
   });
+});
 
+describe("formatTranscriptMessageLines tools", () => {
   it("formats tool summaries and expanded details", () => {
     const message: TranscriptMessage = {
       id: "assistant-3",
@@ -119,5 +124,33 @@ describe("formatTranscriptMessageLines", () => {
       "  ok",
       "  ▣ assistant",
     ]);
+  });
+
+  it("formats interrupted tools as interrupted", () => {
+    const message: TranscriptMessage = {
+      id: "assistant-4",
+      role: "assistant",
+      parts: [
+        {
+          id: "tool-2",
+          type: "tool",
+          tool: "bash",
+          state: {
+            status: "interrupted",
+            input: { command: "sleep 5" },
+            time: { start: 1_000, end: 1_500 },
+          },
+        },
+      ],
+    };
+
+    expect(
+      formatTranscriptMessageLines({
+        expandedIds: new Set(),
+        first: true,
+        message,
+        selectedId: undefined,
+      })[0],
+    ).toMatchObject({ text: "  $ bash interrupted sleep 5 [+]", color: "yellow" });
   });
 });

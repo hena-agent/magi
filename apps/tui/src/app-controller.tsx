@@ -2,7 +2,6 @@
 // biome-ignore-all lint/complexity/noExcessiveLinesPerFunction: Legacy interactive controller kept behavior-preserving during app.tsx split.
 // biome-ignore-all lint/style/noExcessiveLinesPerFile: Legacy interactive controller kept behavior-preserving during app.tsx split.
 import { spawn } from "node:child_process";
-import { loadConfig } from "@magi/config";
 import {
   type AgentInfo,
   type AgentTurnEvent,
@@ -10,8 +9,6 @@ import {
   buildAgentSystemContext,
   buildRevisionContext,
   buildSharedContextHistory,
-  createPrimaryModelAdapter,
-  createSessionStore,
   createTask,
   createToolCall,
   createToolSettlement,
@@ -22,8 +19,6 @@ import {
   getAuth,
   getDefaultAgent,
   getDefaultModelSelection,
-  getEffectiveModelProviderSummaries,
-  getLatestModelSelection,
   getLatestProposedPatch,
   getToolPermission,
   listAgents,
@@ -37,7 +32,6 @@ import {
   refreshOpenAICodexAuth,
   removeAuth,
   runAgentTurn,
-  runTool,
   type Session,
   type SessionEvent,
   type SessionEventType,
@@ -48,15 +42,22 @@ import {
   type ToolResult,
 } from "@magi/core";
 import { runVerificationCommands } from "@magi/harness";
-import { useApp, useInput } from "ink";
+import { useApp, useInput, useStdin } from "ink";
 import { useEffect, useRef, useState } from "react";
-import { AppView } from "./app-view.js";
+import { createToolCallForExecutableAction } from "./agent-action-tool-call.js";
 import {
-  appendDraftSessionEvent,
-  type DraftSessionEvent,
-  draftEventsToSessionEvents,
-  persistDraftSession,
-} from "./draft-session.js";
+  type AppControllerDependencies,
+  defaultAppControllerDependencies,
+} from "./app-controller-dependencies.js";
+import type { AppLifecycle, AppShutdownReason } from "./app-lifecycle.js";
+import { AppView } from "./app-view.js";
+import { formatOutputSummary, readInputString, truncateOneLine } from "./display-format.js";
+import { createSessionEventJournal } from "./draft-session.js";
+import {
+  readPermissionInputAction,
+  readQuestionInputAction,
+  readSelectorInputAction,
+} from "./overlay-input.js";
 import {
   addPromptHistoryEntry,
   clampPromptCursor,
@@ -67,93 +68,49 @@ import {
   selectPreviousPromptHistory,
   setPromptText,
 } from "./prompt-state.js";
+import { formatSessionEventSummary } from "./session-event-format.js";
+import { sessionEventsToTranscriptMessages } from "./session-event-transcript.js";
 import {
+  formatSlashCommandCompletion,
   formatSlashCommandHelp,
   getSlashCommandSuggestions,
-  type SlashCommandInfo,
   visibleSlashCommands,
 } from "./slash-commands.js";
 import {
-  clampTranscriptScrollOffset as clampTranscriptScrollOffsetState,
-  getTranscriptLineCount,
-  getTranscriptMessageLineCount,
-  isExpandableTranscriptId,
-  keepTranscriptMessageOffsetVisible as keepTranscriptMessageOffsetVisibleState,
-  selectTranscriptId,
-} from "./transcript-state.js";
+  getTranscriptLineLimit,
+  readTerminalSize,
+  type TerminalSize,
+  type TuiLayoutMode,
+} from "./terminal-layout.js";
+import {
+  clampTranscriptOffset,
+  scrollTranscriptOffset,
+  scrollTranscriptToStartOffset,
+  selectTranscriptNavigation,
+  toggleTranscriptExpansion,
+} from "./transcript-navigation.js";
 import {
   findMatchingToolPartId,
-  findToolInput,
   isSameToolPart,
   upsertTranscriptPart,
 } from "./transcript-parts.js";
+import { getTranscriptMessageLineCount } from "./transcript-state.js";
+import {
+  formatToolInputTarget,
+  formatToolResultSummary,
+  parseJsonInput,
+} from "./transcript-tool-display.js";
+import type { TranscriptMessage, TranscriptPart } from "./transcript-types.js";
+import { normalizeInkInputEvent } from "./tui-key-event.js";
 import {
   createInitialSession,
   createSessionStartMessage,
   createSystemMessage,
   getInitialModelProviderId,
+  getLatestAgentId,
+  getRestoredModelProviderId,
   type InitialSessionState,
 } from "./tui-session-state.js";
-import { normalizeInkInputEvent } from "./tui-key-event.js";
-
-export type TranscriptToolStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "error"
-  | "denied"
-  | "skipped";
-
-export type TranscriptPart =
-  | {
-      id: string;
-      type: "text";
-      text: string;
-      synthetic?: boolean;
-    }
-  | {
-      id: string;
-      type: "reasoning";
-      text: string;
-      time: { start: number; end?: number };
-    }
-  | {
-      id: string;
-      type: "tool";
-      tool: string;
-      state: {
-        status: TranscriptToolStatus;
-        input?: unknown;
-        output?: string;
-        error?: string;
-        title?: string;
-        metadata?: {
-          durationMs?: number;
-          target?: string;
-          countLabel?: string;
-          summary?: string;
-          preview?: string;
-        };
-        time: { start: number; end?: number };
-      };
-    }
-  | {
-      id: string;
-      type: "status";
-      text: string;
-      tone?: "normal" | "muted" | "success" | "warning" | "danger";
-    };
-
-export type TranscriptMessage = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  agentId?: string;
-  providerId?: string;
-  model?: string;
-  createdAt?: number;
-  completedAt?: number;
-  parts: TranscriptPart[];
-};
 
 export type PendingPermission = {
   call: ToolCall;
@@ -235,29 +192,57 @@ type LiveToolActivity = {
   displayed: boolean;
 };
 
-export function AppController() {
+export function AppController(props: {
+  fullscreen?: boolean;
+  dependencies?: Partial<AppControllerDependencies>;
+  lifecycle?: AppLifecycle;
+}) {
   const { exit } = useApp();
-  const config = loadConfig();
+  const { isRawModeSupported } = useStdin();
+  const dependencies = { ...defaultAppControllerDependencies, ...props.dependencies };
+  const config = dependencies.loadConfig();
   const task = createTask("Bootstrap MAGI TUI");
-  const canReadInput = Boolean(process.stdin.isTTY && process.stdin.setRawMode);
-  const [store] = useState(() => createSessionStore({ workspaceRoot: config.workspaceRoot }));
+  const canReadInput = isRawModeSupported;
+  const [store] = useState(() =>
+    dependencies.createSessionStore({ workspaceRoot: config.workspaceRoot }),
+  );
   const [initialSession] = useState<InitialSessionState>(() => createInitialSession(store, config));
+  const [sessionJournal] = useState(() =>
+    createSessionEventJournal({
+      store,
+      ...(initialSession.session === undefined ? {} : { initialSession: initialSession.session }),
+    }),
+  );
   const providerSessionIdRef = useRef(initialSession.session?.id ?? crypto.randomUUID());
-  const draftEventsRef = useRef<DraftSessionEvent[]>([]);
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const steeringInputsRef = useRef<string[]>([]);
   const interruptionRequestedRef = useRef(false);
+  const foregroundAbortControllerRef = useRef<AbortController | undefined>(undefined);
+  const foregroundCompletionRef = useRef<Promise<void> | undefined>(undefined);
+  const backgroundOperationsRef = useRef(
+    new Map<string, { controller: AbortController; promise: Promise<void> }>(),
+  );
+  const pendingPermissionRef = useRef<PendingPermission | undefined>(undefined);
+  const pendingQuestionRef = useRef<PendingQuestion | undefined>(undefined);
+  const shutdownPromiseRef = useRef<Promise<void> | undefined>(undefined);
+  const storeClosedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const busyDepthRef = useRef(0);
   const activeRunProgressRef = useRef<ActiveRunProgress>(createEmptyRunProgress());
   const liveAssistantStreamsRef = useRef<Map<string, LiveAssistantStream>>(new Map());
   const liveToolActivitiesRef = useRef<Map<string, LiveToolActivity>>(new Map());
   const [session, setSession] = useState<Session | undefined>(initialSession.session);
-  const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => getDefaultAgent());
+  const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => {
+    const events = initialSession.session ? store.listEvents(initialSession.session.id) : [];
+    return getAgent(getLatestAgentId(events)) ?? getDefaultAgent();
+  });
   const [activeProviderId, setActiveProviderId] = useState<string | undefined>(() =>
     getInitialModelProviderId(store, initialSession, config),
   );
   const effectiveModelProviders = getEffectiveProviders();
   const [prompt, setPrompt] = useState("");
   const [promptCursor, setPromptCursor] = useState(0);
+  const promptStateRef = useRef({ prompt: "", cursor: 0 });
   const promptHistoryRef = useRef<string[]>([]);
   const promptHistoryIndexRef = useRef<number | undefined>(undefined);
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
@@ -270,6 +255,8 @@ export function AppController() {
   const [transcriptScrollOffset, setTranscriptScrollOffset] = useState(0);
   const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(() => new Set());
+  const [terminalSize, setTerminalSize] = useState<TerminalSize>(() => readTerminalSize());
+  const [measuredTranscriptLineLimit, setMeasuredTranscriptLineLimit] = useState<number>();
   const [activeStatus, setActiveStatus] = useState("Ready");
   const [runVisualization, setRunVisualization] = useState("idle");
   const [pendingPermission, setPendingPermission] = useState<PendingPermission>();
@@ -289,19 +276,47 @@ export function AppController() {
     pendingPermission || pendingQuestion || pendingSelector
       ? []
       : getSlashCommandSuggestions(prompt);
+  const layoutMode: TuiLayoutMode = props.fullscreen === true ? "fullscreen" : "default";
+  const fallbackTranscriptLineLimit = getTranscriptLineLimit({
+    mode: layoutMode,
+    terminalHeight: terminalSize.height,
+    hasOverlay: Boolean(pendingPermission || pendingQuestion || pendingSelector),
+    suggestionCount: slashCommandSuggestions.length,
+  });
+  const transcriptLineLimit =
+    layoutMode === "fullscreen"
+      ? (measuredTranscriptLineLimit ?? fallbackTranscriptLineLimit)
+      : undefined;
 
   useEffect(() => {
-    setPromptCursor((cursor) => clampPromptCursor(prompt, cursor));
-  }, [prompt.length]);
+    const cursor = clampPromptCursor(prompt, promptStateRef.current.cursor);
+    promptStateRef.current = { prompt, cursor };
+    setPromptCursor(cursor);
+  }, [prompt]);
 
   useEffect(() => {
     setTranscriptScrollOffset((offset) =>
-      clampTranscriptScrollOffsetState({ messages, expandedIds: expandedMessageIds, offset }),
+      clampTranscriptOffset({
+        messages,
+        expandedIds: expandedMessageIds,
+        offset,
+        lineLimit: transcriptLineLimit,
+      }),
     );
     if (selectedMessageId === undefined && messages.length > 0) {
       setSelectedMessageId(messages.at(-1)?.id);
     }
-  }, [messages, selectedMessageId, expandedMessageIds]);
+  }, [messages, selectedMessageId, expandedMessageIds, transcriptLineLimit]);
+
+  useEffect(() => {
+    if (layoutMode !== "fullscreen") return;
+
+    const handleResize = () => setTerminalSize(readTerminalSize());
+    process.stdout.on("resize", handleResize);
+    return () => {
+      process.stdout.off("resize", handleResize);
+    };
+  }, [layoutMode]);
 
   useEffect(() => {
     if (!isBusy) return;
@@ -325,132 +340,74 @@ export function AppController() {
   }
 
   function getPlanFilePath(): string {
-    return `.magi/plans/${session?.id ?? providerSessionIdRef.current}.md`;
+    return `.magi/plans/${sessionJournal.getSession()?.id ?? providerSessionIdRef.current}.md`;
+  }
+
+  function updateMeasuredTranscriptLineLimit(lineLimit: number): void {
+    setMeasuredTranscriptLineLimit((current) => (current === lineLimit ? current : lineLimit));
   }
 
   function isPlanFilePath(filePath: string): boolean {
     return filePath === getPlanFilePath();
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: teardown reads current operation refs and must register once.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      store.close();
+      mountedRef.current = false;
+      foregroundAbortControllerRef.current?.abort();
+      for (const operation of backgroundOperationsRef.current.values()) {
+        operation.controller.abort();
+      }
+      closeStore();
     };
-  }, [store]);
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lifecycle registration is keyed only by the external coordinator.
+  useEffect(() => props.lifecycle?.registerShutdown(shutdownApp), [props.lifecycle]);
 
   useInput(
     (input, key) => {
       const event = normalizeInkInputEvent(input, key);
 
-      if (pendingPermission) {
-        if (event.input.toLowerCase() === "y") {
-          void resolvePermission(true);
-        } else if (event.input.toLowerCase() === "n" || event.name === "escape") {
-          void resolvePermission(false);
-        }
+      if (event.name === "c" && event.ctrl) {
+        handleCtrlC();
+        return;
+      }
 
+      if (pendingPermission) {
+        handlePermissionInputAction(readPermissionInputAction(event));
         return;
       }
 
       if (pendingSelector) {
-        if (event.name === "escape") {
-          setPendingSelector(undefined);
-          return;
-        }
-
-        if (event.name === "up") {
-          setPendingSelector((current) =>
-            current
-              ? {
-                  ...current,
-                  selectedIndex:
-                    current.selectedIndex <= 0
-                      ? current.items.length - 1
-                      : current.selectedIndex - 1,
-                }
-              : current,
-          );
-          return;
-        }
-
-        if (event.name === "down") {
-          setPendingSelector((current) =>
-            current
-              ? { ...current, selectedIndex: (current.selectedIndex + 1) % current.items.length }
-              : current,
-          );
-          return;
-        }
-
-        if (event.name === "return") {
-          const selectedItem = pendingSelector.items[pendingSelector.selectedIndex];
-          setPendingSelector(undefined);
-          if (selectedItem) {
-            pendingSelector.onSelect(selectedItem);
-          }
-          return;
-        }
-
+        handleSelectorInputAction(
+          readSelectorInputAction({
+            event,
+            selectedIndex: pendingSelector.selectedIndex,
+            itemCount: pendingSelector.items.length,
+          }),
+        );
         return;
       }
 
       if (pendingQuestion) {
         const activeQuestion = pendingQuestion.questions[0];
-        const optionCount = activeQuestion?.options.length ?? 0;
-
-        if (event.name === "escape") {
-          resolveQuestion(undefined);
-          return;
-        }
-
-        if (optionCount > 0 && event.name === "up") {
-          setQuestionOptionIndex((index) => (index <= 0 ? optionCount - 1 : index - 1));
-          return;
-        }
-
-        if (optionCount > 0 && event.name === "down") {
-          setQuestionOptionIndex((index) => (index + 1) % optionCount);
-          return;
-        }
-
-        if (optionCount > 0 && event.input === " ") {
-          if (activeQuestion?.multiple) {
-            setQuestionSelectedOptionIndexes((indexes) => {
-              const next = new Set(indexes);
-              if (next.has(questionOptionIndex)) {
-                next.delete(questionOptionIndex);
-              } else {
-                next.add(questionOptionIndex);
-              }
-              return next;
-            });
-          } else {
-            setQuestionSelectedOptionIndexes(new Set([questionOptionIndex]));
-          }
-          setQuestionAnswer("");
-          return;
-        }
-
-        if (event.name === "return") {
-          resolveQuestion(readPendingQuestionAnswer());
-          return;
-        }
-
-        if (event.name === "backspace" || event.name === "delete") {
-          setQuestionAnswer((currentAnswer) => currentAnswer.slice(0, -1));
-          return;
-        }
-
-        if (event.input.length > 0) {
-          setQuestionAnswer((currentAnswer) => currentAnswer + event.input);
-          setQuestionSelectedOptionIndexes(new Set());
-        }
-
+        handleQuestionInputAction(
+          readQuestionInputAction({
+            event,
+            activeQuestion,
+            optionIndex: questionOptionIndex,
+            selectedOptionIndexes: questionSelectedOptionIndexes,
+            answer: questionAnswer,
+          }),
+        );
         return;
       }
 
-      if ((event.input === "q" && prompt.length === 0) || (event.name === "c" && event.ctrl)) {
-        exit();
+      if (event.input === "q" && promptStateRef.current.prompt.length === 0) {
+        void requestExit();
         return;
       }
 
@@ -462,8 +419,7 @@ export function AppController() {
       if (event.name === "tab" && slashCommandSuggestions.length > 0) {
         const selected = slashCommandSuggestions[slashSelectionIndex] ?? slashCommandSuggestions[0];
         if (selected) {
-          const completed = `/${selected.name} `;
-          setPromptWithCursor(completed);
+          setPromptWithCursor(formatSlashCommandCompletion(selected));
         }
         return;
       }
@@ -508,38 +464,41 @@ export function AppController() {
         return;
       }
 
-      if (prompt.length === 0 && event.input === "k") {
+      if (promptStateRef.current.prompt.length === 0 && event.input === "k") {
         selectTranscriptMessage(-1);
         return;
       }
 
-      if (prompt.length === 0 && event.input === "j") {
+      if (promptStateRef.current.prompt.length === 0 && event.input === "j") {
         selectTranscriptMessage(1);
         return;
       }
 
-      if (prompt.length === 0 && (event.input === " " || event.name === "return")) {
+      if (
+        promptStateRef.current.prompt.length === 0 &&
+        (event.input === " " || event.name === "return")
+      ) {
         toggleSelectedMessageExpansion();
         return;
       }
 
       if (event.name === "left" || (event.name === "b" && event.ctrl)) {
-        setPromptCursor((cursor) => Math.max(0, cursor - 1));
+        setPromptCursorPosition(promptStateRef.current.cursor - 1);
         return;
       }
 
       if (event.name === "right" || (event.name === "f" && event.ctrl)) {
-        setPromptCursor((cursor) => Math.min(prompt.length, cursor + 1));
+        setPromptCursorPosition(promptStateRef.current.cursor + 1);
         return;
       }
 
       if (event.name === "a" && event.ctrl) {
-        setPromptCursor(0);
+        setPromptCursorPosition(0);
         return;
       }
 
       if (event.name === "e" && event.ctrl) {
-        setPromptCursor(prompt.length);
+        setPromptCursorPosition(promptStateRef.current.prompt.length);
         return;
       }
 
@@ -555,7 +514,16 @@ export function AppController() {
       }
 
       if (event.name === "return") {
-        const content = prompt.trim();
+        if (slashCommandSuggestions.length > 0) {
+          const selected =
+            slashCommandSuggestions[slashSelectionIndex] ?? slashCommandSuggestions[0];
+          if (selected) {
+            setPromptWithCursor(formatSlashCommandCompletion(selected));
+          }
+          return;
+        }
+
+        const content = promptStateRef.current.prompt.trim();
 
         if (content.length > 0) {
           setPromptWithCursor("");
@@ -580,29 +548,90 @@ export function AppController() {
     },
   );
 
+  function handlePermissionInputAction(action: ReturnType<typeof readPermissionInputAction>): void {
+    if (action.type === "resolve") {
+      void resolvePermission(action.allow);
+    }
+  }
+
+  function handleSelectorInputAction(action: ReturnType<typeof readSelectorInputAction>): void {
+    if (action.type === "cancel") {
+      setPendingSelector(undefined);
+      return;
+    }
+
+    if (action.type === "move") {
+      setPendingSelector((current) =>
+        current ? { ...current, selectedIndex: action.selectedIndex } : current,
+      );
+      return;
+    }
+
+    if (action.type === "select" && pendingSelector) {
+      const selectedItem = pendingSelector.items[action.selectedIndex];
+      setPendingSelector(undefined);
+      if (selectedItem) {
+        pendingSelector.onSelect(selectedItem);
+      }
+    }
+  }
+
+  function handleQuestionInputAction(action: ReturnType<typeof readQuestionInputAction>): void {
+    if (action.type === "cancel") {
+      resolveQuestion(undefined);
+      return;
+    }
+
+    if (action.type === "move") {
+      setQuestionOptionIndex(action.optionIndex);
+      return;
+    }
+
+    if (action.type === "set-selection") {
+      setQuestionSelectedOptionIndexes(action.selectedOptionIndexes);
+      setQuestionAnswer(action.answer);
+      return;
+    }
+
+    if (action.type === "submit") {
+      resolveQuestion(readPendingQuestionAnswer());
+      return;
+    }
+
+    if (action.type === "set-answer") {
+      setQuestionAnswer(action.answer);
+      setQuestionSelectedOptionIndexes(action.selectedOptionIndexes);
+    }
+  }
+
   function setPromptWithCursor(nextPrompt: string, nextCursor: number = nextPrompt.length): void {
     const next = setPromptText(nextPrompt, nextCursor);
+    promptStateRef.current = next;
     setPrompt(next.prompt);
     setPromptCursor(next.cursor);
     setSlashSelectionIndex(0);
   }
 
   function insertPromptText(text: string): void {
-    const next = insertPromptTextState({ prompt, cursor: promptCursor }, text);
+    const next = insertPromptTextState(promptStateRef.current, text);
     setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
   }
 
   function deletePromptCharacter(): void {
-    const next = deletePromptCharacterState({ prompt, cursor: promptCursor });
+    const next = deletePromptCharacterState(promptStateRef.current);
     setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
   }
 
   function deletePreviousPromptWord(): void {
-    const next = deletePreviousPromptWordState({ prompt, cursor: promptCursor });
+    const next = deletePreviousPromptWordState(promptStateRef.current);
     setPromptWithCursor(next.prompt, next.cursor);
     promptHistoryIndexRef.current = undefined;
+  }
+
+  function setPromptCursorPosition(cursor: number): void {
+    setPromptWithCursor(promptStateRef.current.prompt, cursor);
   }
 
   function addPromptHistory(content: string): void {
@@ -633,12 +662,24 @@ export function AppController() {
   }
 
   function scrollTranscript(delta: number): void {
-    setTranscriptScrollOffset((offset) => clampTranscriptScrollOffset(offset + delta));
+    setTranscriptScrollOffset((offset) =>
+      scrollTranscriptOffset({
+        messages,
+        expandedIds: expandedMessageIds,
+        offset,
+        delta,
+        lineLimit: transcriptLineLimit,
+      }),
+    );
   }
 
   function scrollTranscriptToStart(): void {
     setTranscriptScrollOffset(
-      clampTranscriptScrollOffset(getTranscriptLineCount(messages, expandedMessageIds)),
+      scrollTranscriptToStartOffset({
+        messages,
+        expandedIds: expandedMessageIds,
+        lineLimit: transcriptLineLimit,
+      }),
     );
   }
 
@@ -647,59 +688,33 @@ export function AppController() {
   }
 
   function selectTranscriptMessage(direction: number): void {
-    const nextMessageId = selectTranscriptId({
+    const next = selectTranscriptNavigation({
       messages,
+      expandedIds: expandedMessageIds,
       selectedId: selectedMessageId,
+      scrollOffset: transcriptScrollOffset,
       direction,
+      lineLimit: transcriptLineLimit,
     });
-    if (!nextMessageId) return;
+    if (next.selectedId === selectedMessageId && next.scrollOffset === transcriptScrollOffset)
+      return;
 
-    setSelectedMessageId(nextMessageId);
-    keepTranscriptMessageVisible(nextMessageId, expandedMessageIds);
+    setSelectedMessageId(next.selectedId);
+    setTranscriptScrollOffset(next.scrollOffset);
   }
 
   function toggleSelectedMessageExpansion(): void {
-    if (!selectedMessageId) return;
-    if (!isExpandableTranscriptId(messages, selectedMessageId)) return;
     setExpandedMessageIds((expandedIds) => {
-      const next = new Set(expandedIds);
-      if (next.has(selectedMessageId)) {
-        next.delete(selectedMessageId);
-      } else {
-        next.add(selectedMessageId);
-      }
-      setTranscriptScrollOffset((offset) =>
-        clampTranscriptScrollOffsetFor(
-          next,
-          keepTranscriptMessageOffsetVisible(selectedMessageId, next, offset),
-        ),
-      );
-      return next;
+      const next = toggleTranscriptExpansion({
+        messages,
+        expandedIds,
+        selectedId: selectedMessageId,
+        scrollOffset: transcriptScrollOffset,
+        lineLimit: transcriptLineLimit,
+      });
+      setTranscriptScrollOffset(next.scrollOffset);
+      return next.expandedIds;
     });
-  }
-
-  function clampTranscriptScrollOffset(offset: number): number {
-    return clampTranscriptScrollOffsetFor(expandedMessageIds, offset);
-  }
-
-  function clampTranscriptScrollOffsetFor(expandedIds: Set<string>, offset: number): number {
-    return clampTranscriptScrollOffsetState({ messages, expandedIds, offset });
-  }
-
-  function keepTranscriptMessageVisible(messageId: string, expandedIds: Set<string>): void {
-    setTranscriptScrollOffset((offset) =>
-      clampTranscriptScrollOffset(
-        keepTranscriptMessageOffsetVisible(messageId, expandedIds, offset),
-      ),
-    );
-  }
-
-  function keepTranscriptMessageOffsetVisible(
-    messageId: string,
-    expandedIds: Set<string>,
-    offset: number,
-  ): number {
-    return keepTranscriptMessageOffsetVisibleState({ messages, expandedIds, messageId, offset });
   }
 
   async function handleSubmittedPrompt(content: string): Promise<void> {
@@ -708,7 +723,7 @@ export function AppController() {
       return;
     }
 
-    if (isBusy) {
+    if (busyDepthRef.current > 0) {
       const queuedAt = new Date().toISOString();
       const queuedPrompt = {
         content,
@@ -915,11 +930,16 @@ export function AppController() {
     agent: AgentInfo,
     providerId: string | undefined,
   ): Promise<void> {
+    const abortController = new AbortController();
+    const completion = createCompletion();
+    foregroundAbortControllerRef.current = abortController;
+    foregroundCompletionRef.current = completion.promise;
     beginBusy();
     interruptionRequestedRef.current = false;
+    let interrupted = false;
 
     try {
-      const adapter = createPrimaryModelAdapter({
+      const adapter = dependencies.createPrimaryModelAdapter({
         ...config,
         selectedProviderId: providerId,
         sessionId: providerSessionIdRef.current,
@@ -941,6 +961,7 @@ export function AppController() {
         systemContext,
         sessionContext,
         maxIterations: config.agent.maxIterations,
+        signal: abortController.signal,
         shouldInterrupt() {
           return interruptionRequestedRef.current;
         },
@@ -951,6 +972,13 @@ export function AppController() {
           return await executeAgentAction(action, agent, providerId);
         },
       });
+      interrupted = result.status === "interrupted";
+      if (interrupted) {
+        setActiveStatus("Interrupted");
+        addMessage("Agent run interrupted.");
+        return;
+      }
+      const progress = activeRunProgressRef.current;
       const event = appendSessionEvent({
         type: "assistant_message",
         payload: {
@@ -960,6 +988,8 @@ export function AppController() {
           model: adapter.provider?.model,
           agentTurn: true,
           status: result.status,
+          ...(progress.runId === undefined ? {} : { runId: progress.runId }),
+          ...(progress.lastStepId === undefined ? {} : { stepId: progress.lastStepId }),
         },
       });
       persistDraftSessionIfNeeded(content, result.finalText);
@@ -968,13 +998,24 @@ export function AppController() {
         model: adapter.provider?.model,
       });
     } catch (error) {
-      if (!session) {
-        draftEventsRef.current = [];
+      if (isAbortError(error, abortController.signal)) {
+        interrupted = true;
+        setActiveStatus("Interrupted");
+        addMessage("Agent run interrupted.");
+        return;
+      }
+      if (!sessionJournal.getSession()) {
+        sessionJournal.resetToDraft();
       }
       addMessage(`Agent error: ${formatError(error)}`);
     } finally {
+      if (foregroundAbortControllerRef.current === abortController) {
+        foregroundAbortControllerRef.current = undefined;
+        foregroundCompletionRef.current = undefined;
+      }
+      completion.resolve();
       endBusy();
-      void drainQueuedPrompts();
+      if (!interrupted) void drainQueuedPrompts();
     }
   }
 
@@ -1101,7 +1142,7 @@ export function AppController() {
       case "plan_exit":
         return await runPlanExit(agent);
       case "verify":
-        return await runVerification(action.command ?? "", agent);
+        return await runAgentVerification(action, agent);
       case "propose_patch": {
         const event = appendSessionEvent({
           type: "proposed_patch",
@@ -1128,7 +1169,7 @@ export function AppController() {
     const planPath = getPlanFilePath();
     const answer = await new Promise<string | undefined>((resolve) => {
       setQuestionAnswer("");
-      setPendingQuestion({
+      updatePendingQuestion({
         call: createToolCall("question", { source: "plan_exit" }),
         questions: [
           {
@@ -1147,6 +1188,7 @@ export function AppController() {
         resolve,
       });
     });
+    updatePendingQuestion(undefined);
     const accepted = answer?.trim() === "1" || answer?.toLowerCase() === "yes";
     appendSessionEvent({
       type: "plan_exit",
@@ -1155,7 +1197,13 @@ export function AppController() {
 
     if (accepted) {
       const build = getAgent("build");
-      if (build) setActiveAgent(build);
+      if (build) {
+        appendSessionEvent({
+          type: "agent_switch",
+          payload: { agentId: build.id, previousAgentId: agent.id, source: "plan_exit" },
+        });
+        setActiveAgent(build);
+      }
       return [
         "Plan approved. Switched agent: build.",
         MAGI_BUILD_SWITCH_REMINDER,
@@ -1183,7 +1231,7 @@ export function AppController() {
 
     addMessage(`task: ${action.description} (${subagent.id})`);
 
-    const adapter = createPrimaryModelAdapter({
+    const adapter = dependencies.createPrimaryModelAdapter({
       ...config,
       selectedProviderId: providerId,
       sessionId: providerSessionIdRef.current,
@@ -1196,6 +1244,7 @@ export function AppController() {
       userMessage: action.prompt,
       systemContext,
       sessionContext,
+      signal: foregroundAbortControllerRef.current?.signal,
       shouldInterrupt() {
         return interruptionRequestedRef.current;
       },
@@ -1224,7 +1273,8 @@ export function AppController() {
     parentAgent: AgentInfo,
     providerId: string | undefined,
   ): string {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       return "task denied: background tasks require a saved session. Run a normal prompt first or use foreground task mode.";
     }
 
@@ -1239,7 +1289,7 @@ export function AppController() {
     }
 
     const taskId = action.task_id ?? crypto.randomUUID();
-    const targetSessionId = session.id;
+    const targetSessionId = currentSession.id;
     const startedAt = new Date().toISOString();
     store.appendEvent({
       sessionId: targetSessionId,
@@ -1256,7 +1306,8 @@ export function AppController() {
     });
     addMessage(`task background started: ${action.description} (${subagent.id}, ${taskId})`);
 
-    void runBackgroundTaskToCompletion({
+    const controller = new AbortController();
+    const promise = runBackgroundTaskToCompletion({
       action,
       parentAgent,
       providerId,
@@ -1264,7 +1315,10 @@ export function AppController() {
       targetSessionId,
       taskId,
       startedAt,
+      signal: controller.signal,
     });
+    backgroundOperationsRef.current.set(taskId, { controller, promise });
+    void promise.finally(() => backgroundOperationsRef.current.delete(taskId));
 
     return [
       `<task id="${taskId}" state="running" background="true">`,
@@ -1282,12 +1336,13 @@ export function AppController() {
     targetSessionId: string;
     taskId: string;
     startedAt: string;
+    signal: AbortSignal;
   }): Promise<void> {
     try {
-      const adapter = createPrimaryModelAdapter({
+      const adapter = dependencies.createPrimaryModelAdapter({
         ...config,
         selectedProviderId: input.providerId,
-        sessionId: providerSessionIdRef.current,
+        sessionId: input.targetSessionId,
       });
       const sessionContext = buildAgentSessionContext({
         events: store.listEvents(input.targetSessionId),
@@ -1299,8 +1354,9 @@ export function AppController() {
         userMessage: input.action.prompt,
         systemContext,
         sessionContext,
+        signal: input.signal,
         shouldInterrupt() {
-          return false;
+          return input.signal.aborted;
         },
         onEvent(event) {
           appendAgentTurnEventToSession(event, input.subagent, input.targetSessionId, input.taskId);
@@ -1314,16 +1370,23 @@ export function AppController() {
             childAction,
             input.subagent,
             input.targetSessionId,
+            input.signal,
           );
         },
       });
+      if (!mountedRef.current) return;
       const endedAt = new Date().toISOString();
       store.appendEvent({
         sessionId: input.targetSessionId,
         type: "task_update",
         payload: {
           taskId: input.taskId,
-          status: result.status === "completed" ? "completed" : "failed",
+          status:
+            result.status === "completed"
+              ? "completed"
+              : result.status === "interrupted"
+                ? "interrupted"
+                : "failed",
           description: input.action.description,
           subagentId: input.subagent.id,
           parentAgentId: input.parentAgent.id,
@@ -1332,15 +1395,20 @@ export function AppController() {
           finalText: result.finalText,
         },
       });
-      addMessage(`task background ${result.status}: ${input.action.description} (${input.taskId})`);
+      addMessageForSession(
+        input.targetSessionId,
+        `task background ${result.status}: ${input.action.description} (${input.taskId})`,
+      );
     } catch (error) {
+      if (!mountedRef.current) return;
       const endedAt = new Date().toISOString();
+      const interrupted = isAbortError(error, input.signal);
       store.appendEvent({
         sessionId: input.targetSessionId,
         type: "task_update",
         payload: {
           taskId: input.taskId,
-          status: "failed",
+          status: interrupted ? "interrupted" : "failed",
           description: input.action.description,
           subagentId: input.subagent.id,
           parentAgentId: input.parentAgent.id,
@@ -1349,7 +1417,10 @@ export function AppController() {
           error: error instanceof Error ? error.message : String(error),
         },
       });
-      addMessage(`task background failed: ${input.action.description} (${input.taskId})`);
+      addMessageForSession(
+        input.targetSessionId,
+        `task background failed: ${input.action.description} (${input.taskId})`,
+      );
     }
   }
 
@@ -1357,93 +1428,26 @@ export function AppController() {
     action: ExecutableAgentAction,
     agent: AgentInfo,
     targetSessionId: string,
+    signal: AbortSignal,
   ): Promise<string> {
-    const call = createToolCallForExecutableAction(action);
+    const call = createToolCallForExecutableAction(action, {
+      verificationCommands: config.verificationCommands,
+    });
 
     if (!call) {
       return `${action.type} is not available in background tasks.`;
     }
 
-    const result = await runBackgroundToolCall(call, agent, targetSessionId);
+    const result = await runBackgroundToolCall(call, agent, targetSessionId, signal);
 
     return result ? toolResultToObservation(result) : `${call.name} did not run.`;
-  }
-
-  function createToolCallForExecutableAction(action: ExecutableAgentAction): ToolCall | undefined {
-    const actionToolCall = (name: Parameters<typeof createToolCall>[0], input: unknown) =>
-      createToolCall(name, input, action.toolCallId);
-
-    switch (action.type) {
-      case "read":
-        return actionToolCall("read", { path: action.path });
-      case "glob":
-        return actionToolCall("glob", { pattern: action.pattern });
-      case "grep":
-        return actionToolCall("grep", {
-          pattern: action.pattern,
-          ...(action.include === undefined ? {} : { include: action.include }),
-        });
-      case "edit":
-        return actionToolCall("edit", {
-          filePath: action.filePath,
-          oldString: action.oldString,
-          newString: action.newString,
-          ...(action.replaceAll === undefined ? {} : { replaceAll: action.replaceAll }),
-        });
-      case "write":
-        return actionToolCall("write", { filePath: action.filePath, content: action.content });
-      case "apply_patch":
-        return actionToolCall("apply_patch", { patchText: action.patchText });
-      case "webfetch":
-        return actionToolCall("webfetch", {
-          url: action.url,
-          ...(action.format === undefined ? {} : { format: action.format }),
-          ...(action.timeout === undefined ? {} : { timeout: action.timeout }),
-        });
-      case "websearch":
-        return actionToolCall("websearch", {
-          query: action.query,
-          ...(action.providerId === undefined ? {} : { providerId: action.providerId }),
-          ...(action.limit === undefined ? {} : { limit: action.limit }),
-          ...(action.searchType === undefined ? {} : { type: action.searchType }),
-          ...(action.livecrawl === undefined ? {} : { livecrawl: action.livecrawl }),
-          ...(action.contextMaxCharacters === undefined
-            ? {}
-            : { contextMaxCharacters: action.contextMaxCharacters }),
-        });
-      case "todowrite":
-        return actionToolCall("todowrite", { todos: action.todos });
-      case "skill":
-        return actionToolCall("skill", { name: action.name });
-      case "lsp_symbols":
-        return actionToolCall("lsp_symbols", { filePath: action.filePath });
-      case "lsp_definition":
-      case "lsp_references":
-      case "lsp_hover":
-      case "lsp_call_hierarchy":
-        return actionToolCall(action.type, {
-          filePath: action.filePath,
-          line: action.line,
-          character: action.character,
-          ...(action.type === "lsp_call_hierarchy" && action.direction !== undefined
-            ? { direction: action.direction }
-            : {}),
-        });
-      case "verify":
-        return actionToolCall("bash", { command: action.command ?? "" });
-      case "question":
-      case "task":
-      case "plan_exit":
-      case "propose_patch":
-      case "invalid_tool":
-        return undefined;
-    }
   }
 
   async function runBackgroundToolCall(
     call: ToolCall,
     agent: AgentInfo,
     targetSessionId: string,
+    signal: AbortSignal,
   ): Promise<ToolResult | undefined> {
     const permission = getToolPermission(call.name);
     const policy = mergeAgentPermission(agent, config.permissions)[permission];
@@ -1483,7 +1487,30 @@ export function AppController() {
       },
     });
 
-    const result = await runTool(call, { workspaceRoot: config.workspaceRoot });
+    let result: ToolResult;
+    try {
+      result = await dependencies.runTool(call, { workspaceRoot: config.workspaceRoot, signal });
+    } catch (error) {
+      if (!isAbortError(error, signal)) throw error;
+      if (mountedRef.current) {
+        store.appendEvent({
+          sessionId: targetSessionId,
+          type: "tool_settlement",
+          payload: {
+            ...createToolSettlement({
+              call,
+              status: "interrupted",
+              startedAt,
+              endedAt: new Date().toISOString(),
+              durationMs: Date.now() - startedAtMs,
+            }),
+            agentId: agent.id,
+          },
+        });
+      }
+      throw error;
+    }
+    if (!mountedRef.current) return result;
     if (result.ok && call.name === "todowrite") {
       const nextTodos = readTodosFromToolInput(call.input);
       store.appendEvent({
@@ -1491,7 +1518,7 @@ export function AppController() {
         type: "todo_update",
         payload: { todos: nextTodos, background: true },
       });
-      if (session?.id === targetSessionId) {
+      if (sessionJournal.getSession()?.id === targetSessionId) {
         setTodos(nextTodos);
       }
     }
@@ -1511,7 +1538,7 @@ export function AppController() {
         agentId: agent.id,
       },
     });
-    addMessage(formatToolResultMessage(result, call.input));
+    addMessageForSession(targetSessionId, formatToolResultMessage(result, call.input));
 
     return result;
   }
@@ -1530,12 +1557,15 @@ export function AppController() {
   }
 
   function toolResultToObservation(result: ToolResult): string {
-    return result.ok ? result.output || "ok" : `failed: ${result.error}`;
+    if (result.ok) return result.output || "ok";
+    const output = result.output.trim();
+    return `failed: ${result.error ?? "unknown error"}${output ? `\n${truncate(output)}` : ""}`;
   }
 
   async function runToolWithPermission(
     call: ToolCall,
     agent: AgentInfo = activeAgent,
+    execute?: () => Promise<ToolResult>,
   ): Promise<ToolResult | undefined> {
     const permission = getToolPermission(call.name);
     const policy = mergeAgentPermission(agent, config.permissions)[permission];
@@ -1568,7 +1598,7 @@ export function AppController() {
 
     if (policy === "prompt") {
       const allow = await new Promise<boolean>((resolve) => {
-        setPendingPermission({
+        updatePendingPermission({
           call,
           description: `${call.name}: ${JSON.stringify(call.input)}`,
           resolve,
@@ -1576,11 +1606,26 @@ export function AppController() {
         addMessage(`Allow ${call.name}? Press y to allow or n to deny.`);
       });
 
+      updatePendingPermission(undefined);
+      if (foregroundAbortControllerRef.current?.signal.aborted) {
+        appendSessionEvent({
+          type: "tool_settlement",
+          payload: {
+            ...createToolSettlement({
+              call,
+              status: "interrupted",
+              endedAt: new Date().toISOString(),
+            }),
+            agentId: agent.id,
+          },
+        });
+        throw createAbortError();
+      }
+
       appendSessionEvent({
         type: "permission_decision",
         payload: { toolCallId: call.id, action: permission, decision: allow ? "allow" : "deny" },
       });
-      setPendingPermission(undefined);
 
       if (!allow) {
         appendSessionEvent({
@@ -1600,23 +1645,35 @@ export function AppController() {
       }
     }
 
-    return await executeToolCall(call, agent);
+    return await executeToolCall(call, agent, execute);
   }
 
   function resolvePermission(allow: boolean): void {
-    if (!pendingPermission) {
+    const current = pendingPermissionRef.current;
+    if (!current) {
       return;
     }
 
-    pendingPermission.resolve(allow);
+    current.resolve(allow);
   }
 
   function resolveQuestion(answer: string | undefined): void {
-    if (!pendingQuestion) {
+    const current = pendingQuestionRef.current;
+    if (!current) {
       return;
     }
 
-    pendingQuestion.resolve(answer);
+    current.resolve(answer);
+  }
+
+  function updatePendingPermission(next: PendingPermission | undefined): void {
+    pendingPermissionRef.current = next;
+    setPendingPermission(next);
+  }
+
+  function updatePendingQuestion(next: PendingQuestion | undefined): void {
+    pendingQuestionRef.current = next;
+    setPendingQuestion(next);
   }
 
   function readPendingQuestionAnswer(): string | undefined {
@@ -1643,7 +1700,9 @@ export function AppController() {
   async function executeToolCall(
     call: ToolCall,
     agent: AgentInfo = activeAgent,
+    execute?: () => Promise<ToolResult>,
   ): Promise<ToolResult> {
+    const signal = foregroundAbortControllerRef.current?.signal;
     beginBusy();
     setActiveStatus(`Running ${formatToolCallSummary(call)}`);
     const startedAtMs = Date.now();
@@ -1660,10 +1719,15 @@ export function AppController() {
     updateRunVisualizationFromToolSettlement(call, "running");
 
     try {
-      const result =
-        call.name === "question"
+      const result = execute
+        ? await execute()
+        : call.name === "question"
           ? await runInteractiveQuestionTool(call)
-          : await runTool(call, { workspaceRoot: config.workspaceRoot });
+          : await dependencies.runTool(call, {
+              workspaceRoot: config.workspaceRoot,
+              ...(signal === undefined ? {} : { signal }),
+            });
+      if (signal?.aborted) throw createAbortError();
       if (result.ok && call.name === "todowrite") {
         const nextTodos = readTodosFromToolInput(call.input);
         setTodos(nextTodos);
@@ -1689,6 +1753,25 @@ export function AppController() {
       setActiveStatus(formatCompletedToolStatus(result, call.input, durationMs));
       upsertToolResultPart(result, call.input, { durationMs, endedAtMs: Date.now() });
       return result;
+    } catch (error) {
+      if (!isAbortError(error, signal)) throw error;
+      const durationMs = Date.now() - startedAtMs;
+      appendSessionEvent({
+        type: "tool_settlement",
+        payload: {
+          ...createToolSettlement({
+            call,
+            status: "interrupted",
+            startedAt,
+            endedAt: new Date().toISOString(),
+            durationMs,
+          }),
+          agentId: agent.id,
+        },
+      });
+      updateRunVisualizationFromToolSettlement(call, "interrupted");
+      upsertInterruptedToolPart(call, durationMs);
+      throw error;
     } finally {
       setActiveStatus("Ready");
       endBusy();
@@ -1758,6 +1841,27 @@ export function AppController() {
     );
   }
 
+  function upsertInterruptedToolPart(call: ToolCall, durationMs: number): void {
+    const messageId = findAssistantMessageForTool(call) ?? getActiveAssistantMessageId();
+    updateTranscriptMessage(
+      messageId,
+      () => createAssistantMessage(messageId, activeAgent, { providerId: activeProviderId }),
+      (message) =>
+        upsertTranscriptPart(message, {
+          id: findToolPartId(message, call) ?? `tool:${call.id}`,
+          type: "tool",
+          tool: call.name,
+          state: {
+            status: "interrupted",
+            input: call.input,
+            error: "Interrupted by user.",
+            metadata: { durationMs },
+            time: { start: Date.now() - durationMs, end: Date.now() },
+          },
+        }),
+    );
+  }
+
   function getActiveAssistantMessageId(): string {
     const progress = activeRunProgressRef.current;
     if (progress.runId && progress.lastStepId)
@@ -1794,7 +1898,7 @@ export function AppController() {
         setQuestionAnswer("");
         setQuestionOptionIndex(0);
         setQuestionSelectedOptionIndexes(new Set());
-        setPendingQuestion({ call, questions, resolve });
+        updatePendingQuestion({ call, questions, resolve });
         addMessage("question: waiting for user answer");
       });
 
@@ -1813,76 +1917,137 @@ export function AppController() {
         error: formatError(error),
       };
     } finally {
-      setPendingQuestion(undefined);
+      updatePendingQuestion(undefined);
       setQuestionAnswer("");
       setQuestionOptionIndex(0);
       setQuestionSelectedOptionIndexes(new Set());
     }
   }
 
-  async function runVerification(command: string, agent: AgentInfo = activeAgent): Promise<string> {
-    if (mergeAgentPermission(agent, config.permissions).shell === "deny") {
-      const message = `${agent.id} agent cannot run verification because shell permission is denied.`;
+  async function runVerification(command: string): Promise<string> {
+    if (mergeAgentPermission(activeAgent, config.permissions).shell === "deny") {
+      const message = `${activeAgent.id} agent cannot run verification because shell permission is denied.`;
       addMessage(message);
       return message;
     }
 
+    if (foregroundAbortControllerRef.current)
+      return "Cannot verify while another operation is running.";
+    const abortController = new AbortController();
+    const completion = createCompletion();
+    foregroundAbortControllerRef.current = abortController;
+    foregroundCompletionRef.current = completion.promise;
     beginBusy();
 
     try {
       const results = await runVerificationCommands({
         commands: command.length > 0 ? [command] : config.verificationCommands,
         cwd: config.workspaceRoot,
+        signal: abortController.signal,
       });
 
       for (const result of results) {
         appendSessionEvent({
           type: "verification_result",
-          payload: { ...result, agentId: agent.id },
+          payload: { ...result, agentId: activeAgent.id },
         });
         addMessage(`verify: ${result.command}: ${result.status}`);
       }
 
-      return results
-        .map((result) =>
-          [
-            `${result.command}: ${result.status} (exit ${result.exitCode}, ${result.durationMs}ms)`,
-            result.stdout ? `stdout:\n${truncate(result.stdout)}` : "stdout: (empty)",
-            result.stderr ? `stderr:\n${truncate(result.stderr)}` : "stderr: (empty)",
-          ].join("\n"),
-        )
-        .join("\n\n");
+      return results.map(formatVerificationResult).join("\n\n");
     } finally {
+      if (foregroundAbortControllerRef.current === abortController) {
+        foregroundAbortControllerRef.current = undefined;
+        foregroundCompletionRef.current = undefined;
+      }
+      completion.resolve();
       endBusy();
     }
   }
 
+  async function runAgentVerification(
+    action: Extract<ExecutableAgentAction, { type: "verify" }>,
+    agent: AgentInfo,
+  ): Promise<string> {
+    const commands = action.command?.trim() ? [action.command.trim()] : config.verificationCommands;
+    if (commands.length === 0) return "No verification command was provided or configured.";
+
+    const observations: string[] = [];
+    for (const [index, command] of commands.entries()) {
+      const call = createToolCallForExecutableAction({
+        ...action,
+        command,
+        ...(index === 0 ? {} : { toolCallId: undefined }),
+      });
+      if (!call) continue;
+
+      const result = await runToolWithPermission(call, agent, async () => {
+        const [verification] = await runVerificationCommands({
+          commands: [command],
+          cwd: config.workspaceRoot,
+          signal: foregroundAbortControllerRef.current?.signal,
+        });
+        if (!verification) {
+          return {
+            id: call.id,
+            name: call.name,
+            ok: false,
+            output: "",
+            error: `Verification produced no result: ${command}`,
+          };
+        }
+
+        appendSessionEvent({
+          type: "verification_result",
+          payload: { ...verification, agentId: agent.id },
+        });
+        return {
+          id: call.id,
+          name: call.name,
+          ok: verification.status === "passed",
+          output: formatVerificationResult(verification),
+          ...(verification.status === "passed"
+            ? {}
+            : { error: verification.stderr || `Command exited with ${verification.exitCode}.` }),
+        };
+      });
+      if (!result) return `${command} did not run.`;
+      observations.push(toolResultToObservation(result));
+    }
+
+    return observations.join("\n\n");
+  }
+
   async function runSummary(): Promise<void> {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage("No saved session. Run a normal prompt first, or /resume an existing session.");
       return;
     }
 
     const summary = summarizeWorkspace({
       workspaceRoot: config.workspaceRoot,
-      events: store.listEvents(session.id),
+      events: store.listEvents(currentSession.id),
     });
     appendSessionEvent({ type: "summary", payload: summary });
     addMessage(summary.text);
   }
 
   async function reviseFromVerificationFailures(): Promise<void> {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage("No saved session. Run a normal prompt first, or /resume an existing session.");
       return;
     }
 
+    const operation = startForegroundOperation();
+    if (!operation) return;
     beginBusy();
 
     try {
       const context = buildRevisionContext({
         workspaceRoot: config.workspaceRoot,
-        events: store.listEvents(session.id),
+        events: store.listEvents(currentSession.id),
       });
 
       if (context.verificationFailures.length === 0) {
@@ -1890,39 +2055,57 @@ export function AppController() {
         return;
       }
 
-      const adapter = createPrimaryModelAdapter(config);
+      const adapter = dependencies.createPrimaryModelAdapter(config);
       const response = await adapter.generateText({
         system:
           "You are MAGI revising a local code change. Use the provided verification failures and changed files. Suggest the smallest correct fix. If a patch is appropriate, provide a git-apply-compatible unified diff inside a ```diff fenced code block. Do not claim you ran commands.",
         prompt: context.text,
+        signal: operation.controller.signal,
       });
+      operation.controller.signal.throwIfAborted();
       const event = appendSessionEvent({
         type: "assistant_message",
-        payload: { content: response.text, revision: true },
+        payload: {
+          content: response.text,
+          revision: true,
+          runId: `revision-${crypto.randomUUID()}`,
+          stepId: "final",
+        },
       });
       saveProposedPatch(event.id, response.text);
       addMessage(`Revision: ${truncate(response.text)}`, event.id);
     } catch (error) {
-      addMessage(`Revision error: ${formatError(error)}`);
+      if (!isAbortError(error, operation.controller.signal))
+        addMessage(`Revision error: ${formatError(error)}`);
     } finally {
+      operation.finish();
       endBusy();
     }
   }
 
   async function applyLastProposedPatch(): Promise<void> {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage("No saved session. Run a normal prompt first, or /resume an existing session.");
       return;
     }
 
-    const patch = getLatestProposedPatch(store.listEvents(session.id));
+    const patch = getLatestProposedPatch(store.listEvents(currentSession.id));
 
     if (!patch) {
       addMessage("No proposed patch found. Run /revise first.");
       return;
     }
 
-    await runToolWithPermission(createToolCall("apply_patch", { patch }));
+    const operation = startForegroundOperation();
+    if (!operation) return;
+    try {
+      await runToolWithPermission(createToolCall("apply_patch", { patch }));
+    } catch (error) {
+      if (!isAbortError(error, operation.controller.signal)) throw error;
+    } finally {
+      operation.finish();
+    }
   }
 
   function saveProposedPatch(sourceEventId: string, content: string): void {
@@ -1940,14 +2123,17 @@ export function AppController() {
   }
 
   async function previewMagiContext(): Promise<void> {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage("No saved session. Run a normal prompt first, or /resume an existing session.");
       return;
     }
 
+    const operation = startForegroundOperation();
+    if (!operation) return;
     beginBusy();
     try {
-      const events = store.listEvents(session.id);
+      const events = store.listEvents(currentSession.id);
       const latestUserMessage = [...events]
         .reverse()
         .find((event) => event.type === "user_message");
@@ -1965,7 +2151,7 @@ export function AppController() {
         riskLevel: summary.residualRisk,
         changedFiles: summary.changedFiles,
       });
-      const catalogResult = await getModelsDevCatalogResult();
+      const catalogResult = await getModelsDevCatalogResult(operation.controller.signal);
       const effectiveProviders = listEffectiveModelProviders({
         configProviders: config.modelProviders,
         workspaceRoot: config.workspaceRoot,
@@ -1992,18 +2178,20 @@ export function AppController() {
         ].join("\n"),
       );
     } catch (error) {
-      addMessage(`MAGI preview error: ${formatError(error)}`);
+      if (!isAbortError(error, operation.controller.signal))
+        addMessage(`MAGI preview error: ${formatError(error)}`);
     } finally {
+      operation.finish();
       endBusy();
     }
   }
 
-  async function getModelsDevCatalogResult(): Promise<{
+  async function getModelsDevCatalogResult(signal?: AbortSignal): Promise<{
     catalog?: Awaited<ReturnType<typeof loadModelsDevCatalog>>;
     summary: string;
   }> {
     try {
-      const catalog = await loadModelsDevCatalog({ workspaceRoot: config.workspaceRoot });
+      const catalog = await loadModelsDevCatalog({ workspaceRoot: config.workspaceRoot, signal });
       const providers = Object.values(catalog);
       const modelCount = providers.reduce(
         (count, provider) => count + Object.keys(provider.models).length,
@@ -2011,6 +2199,7 @@ export function AppController() {
       );
       return { catalog, summary: `${providers.length} providers, ${modelCount} models` };
     } catch (error) {
+      if (isAbortError(error, signal)) throw error;
       return { summary: `unavailable (${formatError(error)})` };
     }
   }
@@ -2089,18 +2278,13 @@ export function AppController() {
     }
 
     const selectedEvents = store.listEvents(selectedSession.id);
+    resetSessionTransientState();
+    sessionJournal.selectSession(selectedSession);
     setSession(selectedSession);
     providerSessionIdRef.current = selectedSession.id;
     setTodos(getLatestTodos(selectedEvents));
-    setActiveProviderId(
-      getLatestModelSelection({
-        events: selectedEvents,
-        modelProviders: getEffectiveModelProviderSummaries({
-          configProviders: config.modelProviders,
-          workspaceRoot: config.workspaceRoot,
-        }),
-      })?.providerId,
-    );
+    setActiveAgent(getAgent(getLatestAgentId(selectedEvents)) ?? getDefaultAgent());
+    setActiveProviderId(getRestoredModelProviderId(selectedEvents, config));
     setMessages([
       createSystemMessage(
         `Resumed session: ${selectedSession.id}${selectedSession.title ? ` (${selectedSession.title})` : ""}`,
@@ -2114,12 +2298,14 @@ export function AppController() {
       return;
     }
 
-    draftEventsRef.current = [];
+    resetSessionTransientState();
+    sessionJournal.resetToDraft();
     providerSessionIdRef.current = crypto.randomUUID();
     setActiveProviderId(
       getDefaultModelSelection({ modelProviders: effectiveModelProviders })?.providerId,
     );
     setSession(undefined);
+    setActiveAgent(getDefaultAgent());
     setTodos([]);
     setMessages([
       createSystemMessage(
@@ -2128,8 +2314,24 @@ export function AppController() {
     ]);
   }
 
+  function resetSessionTransientState(): void {
+    queuedPromptsRef.current = [];
+    steeringInputsRef.current = [];
+    interruptionRequestedRef.current = false;
+    activeRunProgressRef.current = createEmptyRunProgress();
+    liveAssistantStreamsRef.current.clear();
+    liveToolActivitiesRef.current.clear();
+    setRunVisualization("idle");
+    setActiveStatus("Ready");
+    setSelectedMessageId(undefined);
+    setExpandedMessageIds(new Set());
+    setTranscriptScrollOffset(0);
+    setPendingSelector(undefined);
+  }
+
   function renameCurrentSession(title: string): void {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage(
         "No saved session to rename. Run a normal prompt first, or /resume an existing session.",
       );
@@ -2141,13 +2343,15 @@ export function AppController() {
       return;
     }
 
-    const updatedSession = store.updateSession({ sessionId: session.id, title });
+    const updatedSession = store.updateSession({ sessionId: currentSession.id, title });
+    sessionJournal.selectSession(updatedSession);
     setSession(updatedSession);
     addMessage(`Renamed session: ${title}`);
   }
 
   function showHistory(rawLimit: string | undefined): void {
-    if (!session) {
+    const currentSession = sessionJournal.getSession();
+    if (!currentSession) {
       addMessage(
         "No saved session history. Run a normal prompt first, or /resume an existing session.",
       );
@@ -2162,11 +2366,13 @@ export function AppController() {
       return;
     }
 
-    const events = store.listEvents(session.id).slice(-limit);
+    const events = store.listEvents(currentSession.id).slice(-limit);
     addMessage(
       [
         `Recent history (${events.length} events):`,
-        ...events.map((event) => `${event.sequence}. ${event.type}: ${formatEventPayload(event)}`),
+        ...events.map(
+          (event) => `${event.sequence}. ${event.type}: ${formatSessionEventSummary(event)}`,
+        ),
       ].join("\n"),
     );
   }
@@ -2226,17 +2432,22 @@ export function AppController() {
         return;
       }
 
+      const operation = startForegroundOperation();
+      if (!operation) return;
       beginBusy();
 
       try {
         const refreshed = await refreshOpenAICodexAuth({
           workspaceRoot: config.workspaceRoot,
           auth,
+          signal: operation.controller.signal,
         });
         addMessage(`OpenAI OAuth refreshed. Expires: ${new Date(refreshed.expires).toISOString()}`);
       } catch (error) {
-        addMessage(`OpenAI OAuth refresh failed. Run /auth login openai. ${formatError(error)}`);
+        if (!isAbortError(error, operation.controller.signal))
+          addMessage(`OpenAI OAuth refresh failed. Run /auth login openai. ${formatError(error)}`);
       } finally {
+        operation.finish();
         endBusy();
       }
 
@@ -2250,12 +2461,15 @@ export function AppController() {
       return;
     }
 
+    const operation = startForegroundOperation();
+    if (!operation) return;
     beginBusy();
 
     try {
       if (mode === "headless") {
         const auth = await loginOpenAICodexHeadless({
           workspaceRoot: config.workspaceRoot,
+          signal: operation.controller.signal,
           onUserCode({ url, code }) {
             addMessage(`Open ${url} and enter code: ${code}`);
           },
@@ -2266,6 +2480,7 @@ export function AppController() {
 
       const auth = await loginOpenAICodexBrowser({
         workspaceRoot: config.workspaceRoot,
+        signal: operation.controller.signal,
         openUrl(url) {
           addMessage(`Opening browser for OpenAI OAuth: ${url}`);
           openExternalUrl(url);
@@ -2273,8 +2488,10 @@ export function AppController() {
       });
       addMessage(`OpenAI OAuth login complete. Account: ${auth.accountId ?? "unknown"}`);
     } catch (error) {
-      addMessage(`OpenAI OAuth login failed: ${formatError(error)}`);
+      if (!isAbortError(error, operation.controller.signal))
+        addMessage(`OpenAI OAuth login failed: ${formatError(error)}`);
     } finally {
+      operation.finish();
       endBusy();
     }
   }
@@ -2308,7 +2525,7 @@ export function AppController() {
   }
 
   function showModelSelector(): void {
-    if (isBusy || pendingPermission) {
+    if (busyDepthRef.current > 0 || pendingPermission) {
       addMessage("Cannot switch models while a command is running or waiting for permission.");
       return;
     }
@@ -2344,14 +2561,14 @@ export function AppController() {
         `Agent: ${activeAgent.id} (${activeAgent.mode})`,
         `Model: ${formatProviderLine(activeProviderId ?? effectiveModelProviders[0]?.id, true)}`,
         `Risk: ${task.riskLevel}`,
-        `Session: ${session?.id ?? "draft"}`,
+        `Session: ${sessionJournal.getSession()?.id ?? "draft"}`,
         `Queued prompts: ${queuedPromptsRef.current.length}`,
       ].join("\n"),
     );
   }
 
   function switchModelProvider(providerId: string): void {
-    if (isBusy || pendingPermission) {
+    if (busyDepthRef.current > 0 || pendingPermission) {
       addMessage("Cannot switch models while a command is running or waiting for permission.");
       return;
     }
@@ -2435,7 +2652,7 @@ export function AppController() {
       return undefined;
     }
 
-    if (isBusy || pendingPermission) {
+    if (busyDepthRef.current > 0 || pendingPermission) {
       addMessage("Cannot switch agents while a command is running or waiting for permission.");
       return undefined;
     }
@@ -2461,7 +2678,7 @@ export function AppController() {
       return switchAgent(agentId);
     }
 
-    if (isBusy || pendingPermission) {
+    if (busyDepthRef.current > 0 || pendingPermission) {
       addMessage("Cannot switch agents while a command is running or waiting for permission.");
       return undefined;
     }
@@ -2579,23 +2796,96 @@ export function AppController() {
     addMessage(`Steering input queued: ${truncateOneLine(content)}`);
   }
 
-  function requestInterruption(): void {
-    if (interruptionRequestedRef.current) {
+  function handleCtrlC(): void {
+    if (foregroundAbortControllerRef.current) {
+      if (interruptionRequestedRef.current) {
+        closeStore();
+        process.exit(130);
+      }
+      requestInterruption();
       return;
     }
+    void requestExit();
+  }
+
+  function requestInterruption(reason = "user_cancelled"): void {
+    const controller = foregroundAbortControllerRef.current;
+    if (!controller || controller.signal.aborted) return;
 
     interruptionRequestedRef.current = true;
+    const discardedQueuedPrompts = queuedPromptsRef.current.length;
+    queuedPromptsRef.current = [];
     appendSessionEvent({
       type: "interruption",
-      payload: { reason: "user_cancelled", createdAt: new Date().toISOString() },
+      payload: {
+        reason,
+        discardedQueuedPrompts,
+        createdAt: new Date().toISOString(),
+      },
     });
     addMessage(
-      "Interruption requested. Current provider/tool calls cannot be forcibly aborted yet; the run will stop at the next safe point.",
+      `Interruption requested.${discardedQueuedPrompts > 0 ? ` Discarded ${discardedQueuedPrompts} queued prompt(s).` : ""}`,
     );
+    pendingPermissionRef.current?.resolve(false);
+    pendingQuestionRef.current?.resolve(undefined);
+    controller.abort(createAbortError());
+  }
+
+  async function requestExit(): Promise<void> {
+    await (props.lifecycle?.shutdown("user_exit") ?? shutdownApp("user_exit"));
+    exit();
+  }
+
+  function shutdownApp(reason: AppShutdownReason): Promise<void> {
+    shutdownPromiseRef.current ??= (async () => {
+      requestInterruption(reason);
+      pendingPermissionRef.current?.resolve(false);
+      pendingQuestionRef.current?.resolve(undefined);
+      for (const operation of backgroundOperationsRef.current.values()) {
+        operation.controller.abort(createAbortError());
+      }
+      const operations = [
+        ...(foregroundCompletionRef.current ? [foregroundCompletionRef.current] : []),
+        ...[...backgroundOperationsRef.current.values()].map((operation) => operation.promise),
+      ];
+      await Promise.allSettled(operations);
+      closeStore();
+    })();
+    return shutdownPromiseRef.current;
+  }
+
+  function closeStore(): void {
+    if (storeClosedRef.current) return;
+    storeClosedRef.current = true;
+    store.close();
+  }
+
+  function startForegroundOperation():
+    | { controller: AbortController; finish: () => void }
+    | undefined {
+    if (foregroundAbortControllerRef.current) {
+      addMessage("Another foreground operation is already running.");
+      return undefined;
+    }
+    const controller = new AbortController();
+    const completion = createCompletion();
+    foregroundAbortControllerRef.current = controller;
+    foregroundCompletionRef.current = completion.promise;
+    interruptionRequestedRef.current = false;
+    return {
+      controller,
+      finish() {
+        if (foregroundAbortControllerRef.current === controller) {
+          foregroundAbortControllerRef.current = undefined;
+          foregroundCompletionRef.current = undefined;
+        }
+        completion.resolve();
+      },
+    };
   }
 
   async function drainQueuedPrompts(): Promise<void> {
-    if (queuedPromptsRef.current.length === 0 || busyDepth > 1 || pendingPermission) {
+    if (queuedPromptsRef.current.length === 0 || busyDepthRef.current > 1 || pendingPermission) {
       return;
     }
 
@@ -2623,6 +2913,7 @@ export function AppController() {
   }
 
   function appendAgentTurnEvent(event: AgentTurnEvent, agent: AgentInfo): void {
+    if (!mountedRef.current) return;
     appendSessionEvent({
       type: event.type,
       payload: { ...event.payload, agentId: agent.id },
@@ -2638,6 +2929,7 @@ export function AppController() {
     targetSessionId: string,
     taskId: string,
   ): void {
+    if (!mountedRef.current) return;
     store.appendEvent({
       sessionId: targetSessionId,
       type: event.type,
@@ -2821,7 +3113,7 @@ export function AppController() {
 
   function updateRunVisualizationFromToolSettlement(
     call: ToolCall,
-    status: "pending" | "running" | "succeeded" | "failed" | "denied",
+    status: "pending" | "running" | "succeeded" | "failed" | "denied" | "interrupted",
   ): void {
     const progress = activeRunProgressRef.current;
     progress.lastTool = call.name;
@@ -2898,7 +3190,7 @@ export function AppController() {
   }
 
   function canSwitchSessions(): boolean {
-    if (isBusy || pendingPermission) {
+    if (busyDepthRef.current > 0 || pendingPermission) {
       addMessage("Cannot switch sessions while a command is running or waiting for permission.");
       return false;
     }
@@ -2930,37 +3222,15 @@ export function AppController() {
   }
 
   function appendSessionEvent(input: AppendSessionEventInput): SessionEvent {
-    if (session) {
-      return store.appendEvent({ sessionId: session.id, type: input.type, payload: input.payload });
-    }
-
-    const event = {
-      type: input.type,
-      payload: input.payload,
-    } satisfies AppendSessionEventInput;
-    const result = appendDraftSessionEvent({ draftEvents: draftEventsRef.current, event });
-    draftEventsRef.current = result.draftEvents;
-
-    return result.event;
+    return sessionJournal.append(input);
   }
 
   function getCurrentSessionEvents(): SessionEvent[] {
-    if (session) {
-      return store.listEvents(session.id);
-    }
-
-    return draftEventsToSessionEvents(draftEventsRef.current);
+    return sessionJournal.getEvents();
   }
 
   function persistDraftSessionIfNeeded(userMessage: string, assistantMessage: string): void {
-    if (session || draftEventsRef.current.length === 0) {
-      return;
-    }
-
-    const result = persistDraftSession({
-      session,
-      store,
-      draftEvents: draftEventsRef.current,
+    const result = sessionJournal.persistDraft({
       userMessage,
       assistantMessage,
       createTitle: createSessionTitle,
@@ -2968,13 +3238,13 @@ export function AppController() {
 
     if (!result.persisted) return;
 
-    draftEventsRef.current = [];
+    providerSessionIdRef.current = result.session.id;
     setSession(result.session);
     addMessage(`Saved session: ${result.session.id} (${result.title})`);
   }
 
   function requirePersistedSession(message: string): boolean {
-    if (session) {
+    if (sessionJournal.getSession()) {
       return true;
     }
 
@@ -2984,6 +3254,10 @@ export function AppController() {
 
   function addMessage(content: string, id: string = crypto.randomUUID()): void {
     addTranscriptMessage(createSystemMessage(content, id));
+  }
+
+  function addMessageForSession(sessionId: string, content: string): void {
+    if (sessionJournal.getSession()?.id === sessionId) addMessage(content);
   }
 
   function addUserMessage(
@@ -3010,18 +3284,6 @@ export function AppController() {
         ? 0
         : offset + getTranscriptMessageLineCount({ message, expandedIds: expandedMessageIds }),
     );
-  }
-
-  function upsertTranscriptMessage(message: TranscriptMessage): void {
-    setMessages((currentMessages) => {
-      const index = currentMessages.findIndex((candidate) => candidate.id === message.id);
-      if (index === -1) return [...currentMessages, message];
-
-      return currentMessages.map((candidate, candidateIndex) =>
-        candidateIndex === index ? { ...candidate, ...message } : candidate,
-      );
-    });
-    setSelectedMessageId(message.id);
   }
 
   function updateTranscriptMessage(
@@ -3053,12 +3315,11 @@ export function AppController() {
       messageId,
       () => createAssistantMessage(messageId, agent, metadata),
       (message) => {
-        const hasText = message.parts.some((part) => part.type === "text" && !part.synthetic);
         const parts =
-          finalText.trim().length > 0 && !hasText
+          finalText.trim().length > 0
             ? [
-                ...message.parts,
-                { id: `${messageId}:final-text`, type: "text" as const, text: finalText },
+                ...message.parts.filter((part) => part.type !== "text" || part.synthetic),
+                { id: `${messageId}:text`, type: "text" as const, text: finalText },
               ]
             : message.parts;
         return {
@@ -3073,11 +3334,13 @@ export function AppController() {
   }
 
   function beginBusy(): void {
-    setBusyDepth((currentDepth) => currentDepth + 1);
+    busyDepthRef.current += 1;
+    setBusyDepth(busyDepthRef.current);
   }
 
   function endBusy(): void {
-    setBusyDepth((currentDepth) => Math.max(0, currentDepth - 1));
+    busyDepthRef.current = Math.max(0, busyDepthRef.current - 1);
+    setBusyDepth(busyDepthRef.current);
   }
 
   return (
@@ -3089,6 +3352,7 @@ export function AppController() {
       expandedMessageIds={expandedMessageIds}
       activeStatus={activeStatus}
       isBusy={isBusy}
+      layoutMode={layoutMode}
       messages={messages}
       mode={task.mode}
       pendingPermission={pendingPermission}
@@ -3109,6 +3373,9 @@ export function AppController() {
       slashCommandSuggestions={slashCommandSuggestions}
       todoOpenCount={todos.filter((todo) => todo.status !== "completed").length}
       transcriptScrollOffset={transcriptScrollOffset}
+      transcriptLineLimit={transcriptLineLimit}
+      onTranscriptLineLimitChange={updateMeasuredTranscriptLineLimit}
+      terminalSize={terminalSize}
       workspaceRoot={config.workspaceRoot}
     />
   );
@@ -3241,65 +3508,6 @@ function formatAssistantStreamToolPart(
   };
 }
 
-function parseJsonInput(value: string | undefined): unknown {
-  if (!value) return undefined;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-function formatToolInputTarget(toolName: string, input: unknown): string | undefined {
-  switch (toolName) {
-    case "bash":
-      return readInputString(input, "command");
-    case "read":
-      return readInputString(input, "filePath") ?? readInputString(input, "path");
-    case "grep":
-    case "glob":
-      return readInputString(input, "pattern");
-    case "webfetch":
-      return readInputString(input, "url");
-    case "websearch":
-      return readInputString(input, "query");
-    case "write":
-    case "edit":
-      return readInputString(input, "filePath");
-    case "task":
-      return readInputString(input, "description");
-    default:
-      return undefined;
-  }
-}
-
-function createToolPartFromInput(
-  id: string,
-  toolName: string,
-  input: unknown,
-  status: "pending" | "running",
-  startedAtMs: number,
-): TranscriptPart {
-  const target = formatToolInputTarget(toolName, input);
-  return {
-    id,
-    type: "tool",
-    tool: toolName,
-    state: {
-      status,
-      input,
-      metadata: target ? { target } : undefined,
-      time: { start: startedAtMs },
-    },
-  };
-}
-
-function formatUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
 function formatToolCount(
   activity: LiveToolActivity,
   toolNames: string[],
@@ -3381,7 +3589,7 @@ function formatThinkingStatus(progress: ActiveRunProgress): string {
 
 function formatToolStatus(
   toolName: string,
-  status: "pending" | "running" | "succeeded" | "failed" | "denied",
+  status: "pending" | "running" | "succeeded" | "failed" | "denied" | "interrupted",
 ): string {
   if (status === "pending" || status === "running") {
     return `Tool ${toolName} ${status}`;
@@ -3481,558 +3689,14 @@ function titleFromAssistantMessage(message: string): string | undefined {
   return candidate === undefined ? undefined : truncateTitle(candidate);
 }
 
-function sessionEventsToTranscriptMessages(
-  events: SessionEvent[],
-  limit: number,
-): TranscriptMessage[] {
-  const messages: TranscriptMessage[] = [];
-  let currentAssistantId: string | undefined;
-  const reasoningStarts = new Map<string, number>();
-  const reasoningTexts = new Map<string, string>();
-  const toolInputs = new Map<
-    string,
-    { toolName: string; raw: string; input?: unknown; startedAt: number }
-  >();
-
-  const appendSystem = (text: string, id: string) => messages.push(createSystemMessage(text, id));
-  const ensureAssistant = (
-    id: string,
-    payload?: { agentId?: unknown; providerId?: unknown; model?: unknown },
-  ) => {
-    let message = messages.find((candidate) => candidate.id === id);
-    if (!message) {
-      message = {
-        id,
-        role: "assistant",
-        agentId: typeof payload?.agentId === "string" ? payload.agentId : undefined,
-        providerId: typeof payload?.providerId === "string" ? payload.providerId : undefined,
-        model: typeof payload?.model === "string" ? payload.model : undefined,
-        createdAt: Date.parse(
-          events.find((event) => event.id === id)?.createdAt ?? new Date().toISOString(),
-        ),
-        parts: [],
-      };
-      messages.push(message);
-    }
-    currentAssistantId = id;
-    return message;
-  };
-  const updateAssistant = (
-    id: string,
-    part: TranscriptPart,
-    payload?: { agentId?: unknown; providerId?: unknown; model?: unknown },
-  ) => {
-    const message = ensureAssistant(id, payload);
-    const updated = upsertTranscriptPart(message, part);
-    const index = messages.findIndex((candidate) => candidate.id === id);
-    messages[index] = updated;
-  };
-
-  for (const event of events) {
-    switch (event.type) {
-      case "user_message": {
-        const payload = event.payload as {
-          content?: unknown;
-          agentId?: unknown;
-          providerId?: unknown;
-        };
-        if (typeof payload.content !== "string") break;
-        messages.push({
-          id: `${event.id}-user`,
-          role: "user",
-          agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
-          providerId: typeof payload.providerId === "string" ? payload.providerId : undefined,
-          createdAt: Date.parse(event.createdAt),
-          parts: [{ id: `${event.id}-text`, type: "text", text: truncate(payload.content) }],
-        });
-        break;
-      }
-      case "agent_step_started":
-      case "assistant_started": {
-        const payload = event.payload as {
-          runId?: unknown;
-          stepId?: unknown;
-          agentId?: unknown;
-          providerId?: unknown;
-          model?: unknown;
-        };
-        if (typeof payload.runId === "string" && typeof payload.stepId === "string") {
-          ensureAssistant(`assistant:${payload.runId}:${payload.stepId}`, payload);
-        }
-        break;
-      }
-      case "assistant_status": {
-        const payload = event.payload as {
-          runId?: unknown;
-          stepId?: unknown;
-          text?: unknown;
-          kind?: unknown;
-          agentId?: unknown;
-        };
-        if (typeof payload.text !== "string") break;
-        const id =
-          typeof payload.runId === "string" && typeof payload.stepId === "string"
-            ? `assistant:${payload.runId}:${payload.stepId}`
-            : (currentAssistantId ?? event.id);
-        updateAssistant(
-          id,
-          payload.kind === "reasoning"
-            ? {
-                id: `${event.id}:reasoning`,
-                type: "reasoning",
-                text: payload.text,
-                time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
-              }
-            : { id: `${event.id}:status`, type: "status", text: payload.text, tone: "muted" },
-          payload,
-        );
-        break;
-      }
-      case "assistant_stream": {
-        const payload = event.payload as {
-          runId?: unknown;
-          stepId?: unknown;
-          kind?: unknown;
-          id?: unknown;
-          toolName?: unknown;
-          input?: unknown;
-          finishReason?: unknown;
-          agentId?: unknown;
-          text?: unknown;
-          delta?: unknown;
-        };
-        if (typeof payload.runId !== "string" || typeof payload.stepId !== "string") break;
-        const id = `assistant:${payload.runId}:${payload.stepId}`;
-        if (payload.kind === "text_delta" && typeof payload.text === "string") {
-          const message = ensureAssistant(id, payload);
-          const existing = message.parts.find(
-            (part): part is Extract<TranscriptPart, { type: "text" }> =>
-              part.type === "text" && part.id === `${id}:text`,
-          );
-          updateAssistant(
-            id,
-            {
-              id: `${id}:text`,
-              type: "text",
-              text: `${existing?.text ?? ""}${payload.text}`,
-            },
-            payload,
-          );
-        } else if (payload.kind === "reasoning_start" && typeof payload.id === "string") {
-          reasoningStarts.set(payload.id, Date.parse(event.createdAt));
-          reasoningTexts.set(payload.id, "");
-          updateAssistant(
-            id,
-            {
-              id: `reasoning:${payload.id}`,
-              type: "reasoning",
-              text: "",
-              time: { start: Date.parse(event.createdAt) },
-            },
-            payload,
-          );
-        } else if (
-          payload.kind === "reasoning_delta" &&
-          typeof payload.id === "string" &&
-          typeof payload.text === "string"
-        ) {
-          const text = `${reasoningTexts.get(payload.id) ?? ""}${payload.text}`;
-          reasoningTexts.set(payload.id, text);
-          updateAssistant(
-            id,
-            {
-              id: `reasoning:${payload.id}`,
-              type: "reasoning",
-              text,
-              time: { start: reasoningStarts.get(payload.id) ?? Date.parse(event.createdAt) },
-            },
-            payload,
-          );
-        } else if (payload.kind === "reasoning_end" && typeof payload.id === "string") {
-          updateAssistant(
-            id,
-            {
-              id: `reasoning:${payload.id}`,
-              type: "reasoning",
-              text: reasoningTexts.get(payload.id) ?? "",
-              time: {
-                start: reasoningStarts.get(payload.id) ?? Date.parse(event.createdAt),
-                end: Date.parse(event.createdAt),
-              },
-            },
-            payload,
-          );
-        } else if (
-          payload.kind === "tool_input_start" &&
-          typeof payload.id === "string" &&
-          typeof payload.toolName === "string"
-        ) {
-          toolInputs.set(payload.id, {
-            toolName: payload.toolName,
-            raw: "",
-            startedAt: Date.parse(event.createdAt),
-          });
-          updateAssistant(
-            id,
-            createToolPartFromInput(
-              `tool:${payload.id}`,
-              payload.toolName,
-              undefined,
-              "pending",
-              Date.parse(event.createdAt),
-            ),
-            payload,
-          );
-        } else if (
-          payload.kind === "tool_input_delta" &&
-          typeof payload.id === "string" &&
-          typeof payload.delta === "string"
-        ) {
-          const current = toolInputs.get(payload.id) ?? {
-            toolName: "tool",
-            raw: "",
-            startedAt: Date.parse(event.createdAt),
-          };
-          const raw = `${current.raw}${payload.delta}`;
-          const input = parseJsonInput(raw);
-          toolInputs.set(payload.id, { ...current, raw, input });
-          updateAssistant(
-            id,
-            createToolPartFromInput(
-              `tool:${payload.id}`,
-              current.toolName,
-              input,
-              "pending",
-              current.startedAt,
-            ),
-            payload,
-          );
-        } else if (payload.kind === "tool_input_end" && typeof payload.id === "string") {
-          const current = toolInputs.get(payload.id);
-          if (current) {
-            updateAssistant(
-              id,
-              createToolPartFromInput(
-                `tool:${payload.id}`,
-                current.toolName,
-                current.input ?? parseJsonInput(current.raw),
-                "pending",
-                current.startedAt,
-              ),
-              payload,
-            );
-          }
-        } else if (
-          payload.kind === "tool_call" &&
-          typeof payload.id === "string" &&
-          typeof payload.toolName === "string"
-        ) {
-          updateAssistant(
-            id,
-            createToolPartFromInput(
-              `tool:${payload.id}`,
-              payload.toolName,
-              payload.input,
-              "running",
-              Date.parse(event.createdAt),
-            ),
-            payload,
-          );
-        } else if (payload.kind === "finish_step") {
-          updateAssistant(
-            id,
-            {
-              id: `${event.id}:status`,
-              type: "status",
-              text: `model step finished${typeof payload.finishReason === "string" ? `: ${payload.finishReason}` : ""}`,
-              tone: "muted",
-            },
-            payload,
-          );
-        }
-        break;
-      }
-      case "agent_tool_skipped": {
-        const payload = event.payload as {
-          runId?: unknown;
-          stepId?: unknown;
-          toolCallId?: unknown;
-          toolName?: unknown;
-          input?: unknown;
-          reason?: unknown;
-          agentId?: unknown;
-        };
-        if (
-          typeof payload.runId !== "string" ||
-          typeof payload.stepId !== "string" ||
-          typeof payload.toolName !== "string"
-        ) {
-          break;
-        }
-        const assistantId = `assistant:${payload.runId}:${payload.stepId}`;
-        const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : undefined;
-        const message = ensureAssistant(assistantId, payload);
-        updateAssistant(
-          assistantId,
-          {
-            id: findMatchingToolPartId(message, payload.toolName, payload.input, toolCallId),
-            type: "tool",
-            tool: payload.toolName,
-            state: {
-              status: "skipped",
-              input: payload.input,
-              error: typeof payload.reason === "string" ? payload.reason : undefined,
-              title: "skipped repeated action",
-              metadata: {
-                target: formatToolInputTarget(payload.toolName, payload.input),
-                ...(typeof payload.reason === "string" ? { summary: payload.reason } : {}),
-              },
-              time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
-            },
-          },
-          payload,
-        );
-        break;
-      }
-      case "assistant_message": {
-        const payload = event.payload as {
-          content?: unknown;
-          agentId?: unknown;
-          providerId?: unknown;
-          model?: unknown;
-        };
-        if (typeof payload.content !== "string") break;
-        const id = currentAssistantId ?? event.id;
-        updateAssistant(
-          id,
-          { id: `${event.id}:text`, type: "text", text: truncate(payload.content) },
-          payload,
-        );
-        const message = messages.find((candidate) => candidate.id === id);
-        if (message) message.completedAt = Date.parse(event.createdAt);
-        break;
-      }
-      case "tool_call": {
-        const payload = event.payload as { id?: unknown; name?: unknown; input?: unknown };
-        if (typeof payload.id !== "string" || typeof payload.name !== "string") break;
-        updateAssistant(
-          currentAssistantId ?? `assistant:${event.id}`,
-          createToolPartFromInput(
-            `tool:${payload.id}`,
-            payload.name,
-            payload.input,
-            "running",
-            Date.parse(event.createdAt),
-          ),
-        );
-        break;
-      }
-      case "tool_result": {
-        const payload = event.payload as {
-          id?: unknown;
-          name?: unknown;
-          ok?: unknown;
-          output?: unknown;
-          error?: unknown;
-        };
-        if (
-          typeof payload.id !== "string" ||
-          typeof payload.name !== "string" ||
-          typeof payload.ok !== "boolean" ||
-          typeof payload.output !== "string"
-        )
-          break;
-        const input = findToolInput(messages, payload.id);
-        const result = {
-          id: payload.id,
-          name: payload.name as ToolResult["name"],
-          ok: payload.ok,
-          output: payload.output,
-          error: typeof payload.error === "string" ? payload.error : undefined,
-        };
-        const summary = formatToolResultSummary(result, input);
-        updateAssistant(currentAssistantId ?? `assistant:${event.id}`, {
-          id: `tool:${payload.id}`,
-          type: "tool",
-          tool: payload.name,
-          state: {
-            status: payload.ok ? "completed" : "error",
-            input,
-            output: payload.ok ? payload.output.trim() : undefined,
-            error: payload.ok
-              ? undefined
-              : typeof payload.error === "string"
-                ? payload.error
-                : payload.output,
-            title: summary.content,
-            metadata: {
-              ...(summary.target ? { target: summary.target } : {}),
-              ...(summary.countLabel ? { countLabel: summary.countLabel } : {}),
-              ...(summary.summary ? { summary: summary.summary } : {}),
-              ...(summary.preview ? { preview: summary.preview } : {}),
-            },
-            time: { start: Date.parse(event.createdAt), end: Date.parse(event.createdAt) },
-          },
-        });
-        break;
-      }
-      case "tool_settlement":
-      case "verification_result":
-      case "agent_switch":
-      case "model_switch":
-      case "todo_update":
-      case "task_update":
-      case "plan_exit":
-      case "summary": {
-        appendSystem(formatEventPayload(event), event.id);
-        break;
-      }
-    }
-  }
-
-  return messages.slice(-limit);
-}
-
-function formatEventPayload(event: SessionEvent): string {
-  switch (event.type) {
-    case "user_message":
-    case "assistant_message": {
-      const payload = event.payload as { content?: unknown };
-
-      return typeof payload.content === "string" ? truncateOneLine(payload.content) : "(invalid)";
-    }
-    case "tool_call": {
-      const payload = event.payload as { name?: unknown };
-
-      return typeof payload.name === "string" ? payload.name : "tool";
-    }
-    case "tool_result": {
-      const payload = event.payload as {
-        name?: unknown;
-        ok?: unknown;
-        output?: unknown;
-        error?: unknown;
-      };
-      const name = typeof payload.name === "string" ? payload.name : "tool";
-
-      if (payload.ok !== true) {
-        return `${name}: failed${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
-      }
-
-      return `${name}: ${formatOutputSummary(typeof payload.output === "string" ? payload.output : "")}`;
-    }
-    case "tool_settlement": {
-      const payload = event.payload as { name?: unknown; status?: unknown; error?: unknown };
-      const name = typeof payload.name === "string" ? payload.name : "tool";
-      const status = typeof payload.status === "string" ? payload.status : "unknown";
-
-      return `${name}: ${status}${typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : ""}`;
-    }
-    case "agent_step_started": {
-      const payload = event.payload as { reason?: unknown };
-
-      return `step started: ${String(payload.reason ?? "unknown")}`;
-    }
-    case "assistant_started":
-      return "assistant started";
-    case "assistant_status": {
-      const payload = event.payload as { kind?: unknown; text?: unknown };
-      const kind = typeof payload.kind === "string" ? payload.kind : "status";
-
-      return typeof payload.text === "string" ? `${kind}: ${truncateOneLine(payload.text)}` : kind;
-    }
-    case "assistant_stream": {
-      const payload = event.payload as { kind?: unknown; toolName?: unknown; text?: unknown };
-      const kind = typeof payload.kind === "string" ? payload.kind : "stream";
-      const toolName = typeof payload.toolName === "string" ? ` ${payload.toolName}` : "";
-      const text = typeof payload.text === "string" ? `: ${truncateOneLine(payload.text)}` : "";
-
-      return `${kind}${toolName}${text}`;
-    }
-    case "agent_tool_skipped": {
-      const payload = event.payload as { toolName?: unknown; reason?: unknown };
-      const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
-      const reason =
-        typeof payload.reason === "string" ? `: ${truncateOneLine(payload.reason)}` : "";
-
-      return `${toolName}: skipped${reason}`;
-    }
-    case "agent_step_ended": {
-      const payload = event.payload as { status?: unknown };
-
-      return `step ended: ${String(payload.status ?? "unknown")}`;
-    }
-    case "provider_error": {
-      const payload = event.payload as { message?: unknown };
-
-      return typeof payload.message === "string"
-        ? truncateOneLine(payload.message)
-        : "provider error";
-    }
-    case "interruption": {
-      const payload = event.payload as { reason?: unknown };
-
-      return `interrupted: ${String(payload.reason ?? "unknown")}`;
-    }
-    case "context_summary":
-      return "context summary";
-    case "queued_user_input": {
-      const payload = event.payload as { content?: unknown; mode?: unknown };
-
-      return `${String(payload.mode ?? "queued")}: ${typeof payload.content === "string" ? truncateOneLine(payload.content) : "input"}`;
-    }
-    case "verification_result": {
-      const payload = event.payload as { command?: unknown; status?: unknown };
-
-      return `${typeof payload.command === "string" ? payload.command : "unknown"}: ${typeof payload.status === "string" ? payload.status : "unknown"}`;
-    }
-    case "permission_decision": {
-      const payload = event.payload as { action?: unknown; decision?: unknown };
-
-      return `${String(payload.action ?? "permission")}: ${String(payload.decision ?? "unknown")}`;
-    }
-    case "proposed_patch": {
-      const payload = event.payload as { summary?: unknown };
-
-      return typeof payload.summary === "string" ? truncateOneLine(payload.summary) : "patch saved";
-    }
-    case "summary":
-      return "workspace summary";
-    case "agent_switch": {
-      const payload = event.payload as { agentId?: unknown; previousAgentId?: unknown };
-      const previous =
-        typeof payload.previousAgentId === "string" ? `${payload.previousAgentId} -> ` : "";
-
-      return `agent: ${previous}${String(payload.agentId ?? "unknown")}`;
-    }
-    case "model_switch": {
-      const payload = event.payload as { providerId?: unknown; model?: unknown };
-
-      return `${String(payload.providerId ?? "unknown")}: ${String(payload.model ?? "unknown")}`;
-    }
-    case "todo_update":
-      return `${countOpenTodos(readTodosFromPayload(event.payload))} open`;
-    case "task_update": {
-      const payload = event.payload as {
-        description?: unknown;
-        status?: unknown;
-        error?: unknown;
-      };
-      const status = typeof payload.status === "string" ? payload.status : "unknown";
-      const description =
-        typeof payload.description === "string" ? truncateOneLine(payload.description) : "task";
-      const error = typeof payload.error === "string" ? `: ${truncateOneLine(payload.error)}` : "";
-
-      return `${status}: ${description}${error}`;
-    }
-    case "plan_exit": {
-      const payload = event.payload as { accepted?: unknown; planPath?: unknown };
-
-      return `${payload.accepted === true ? "accepted" : "continued"}: ${String(payload.planPath ?? "plan")}`;
-    }
-    case "magi_decision_trail":
-      return "MAGI decision trail";
-  }
+function formatVerificationResult(
+  result: Awaited<ReturnType<typeof runVerificationCommands>>[number],
+): string {
+  return [
+    `${result.command}: ${result.status} (exit ${result.exitCode}, ${result.durationMs}ms)`,
+    result.stdout ? `stdout:\n${truncate(result.stdout)}` : "stdout: (empty)",
+    result.stderr ? `stderr:\n${truncate(result.stderr)}` : "stderr: (empty)",
+  ].join("\n");
 }
 
 function truncate(value: string): string {
@@ -4057,117 +3721,6 @@ function formatMagiEngineCandidates(
         : `${candidate.family}=${candidate.providerId}/${candidate.model} missing ${candidate.missingEnv}`,
     )
     .join(", ");
-}
-
-type ToolDisplaySummary = {
-  content: string;
-  target?: string;
-  countLabel?: string;
-  summary?: string;
-  preview?: string;
-};
-
-function formatToolResultSummary(result: ToolResult, input: unknown): ToolDisplaySummary {
-  if (!result.ok) {
-    return {
-      content: "failed",
-      summary: result.error ? truncateOneLine(result.error) : undefined,
-    };
-  }
-
-  const output = result.output.trim();
-  switch (result.name) {
-    case "read": {
-      const path = readInputString(input, "path") ?? "file";
-      const lineCount = output.length === 0 ? 0 : output.split("\n").length;
-      return {
-        content: "file read complete",
-        target: path,
-        countLabel: `${lineCount} lines, ${result.output.length} chars`,
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "glob": {
-      const pattern = readInputString(input, "pattern") ?? "pattern";
-      const matches = output.length === 0 ? 0 : output.split("\n").length;
-      return {
-        content: "glob complete",
-        target: pattern,
-        countLabel: `${matches} matches`,
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "grep": {
-      const pattern = readInputString(input, "pattern") ?? "pattern";
-      const include = readInputString(input, "include");
-      const matches = output.length === 0 ? 0 : output.split("\n").length;
-      return {
-        content: "search complete",
-        target: include ? `${pattern} in ${include}` : pattern,
-        countLabel: `${matches} matches`,
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "bash": {
-      const command = readInputString(input, "command") ?? "command";
-      return {
-        content: "command complete",
-        target: command,
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "webfetch": {
-      const url = readInputString(input, "url") ?? "url";
-      return {
-        content: "fetched URL",
-        target: url,
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "websearch": {
-      const query = readInputString(input, "query") ?? "query";
-      return {
-        content: "web search complete",
-        target: query,
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "lsp_symbols":
-    case "lsp_definition":
-    case "lsp_references":
-    case "lsp_hover":
-    case "lsp_call_hierarchy": {
-      const filePath = readInputString(input, "filePath") ?? "file";
-      return {
-        content: "LSP query complete",
-        target: filePath,
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    case "apply_patch":
-      return {
-        content: "workspace updated",
-        target: formatPatchTargets(input) ?? "patch",
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    case "edit":
-    case "write": {
-      const filePath = readInputString(input, "filePath") ?? "file";
-      return {
-        content: "workspace updated",
-        target: filePath,
-        summary: formatOutputSummary(result.output),
-        preview: formatOutputPreview(result.output),
-      };
-    }
-    default:
-      return { content: "tool complete", summary: formatOutputSummary(result.output) };
-  }
 }
 
 function formatToolCallSummary(call: ToolCall): string {
@@ -4300,10 +3853,6 @@ function readTodos(value: unknown): TodoItem[] {
   });
 }
 
-function countOpenTodos(todos: TodoItem[]): number {
-  return todos.filter((todo) => todo.status !== "completed").length;
-}
-
 function readQuestionPrompt(value: unknown): QuestionPrompt {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("question item must be an object");
@@ -4378,73 +3927,6 @@ function readRequiredString(input: Record<string, unknown>, field: string): stri
   return value;
 }
 
-function formatOutputSummary(output: string): string {
-  const trimmed = output.trim();
-
-  if (trimmed.length === 0) {
-    return "empty output";
-  }
-
-  const lines = trimmed.split("\n");
-  return lines.length === 1
-    ? truncateOneLine(trimmed)
-    : `${lines.length} lines: ${truncateOneLine(trimmed)}`;
-}
-
-function formatOutputPreview(output: string): string | undefined {
-  const lines = output
-    .trim()
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0);
-
-  if (lines.length === 0) {
-    return undefined;
-  }
-
-  const previewLines = lines.slice(0, 4);
-  const suffix =
-    lines.length > previewLines.length
-      ? `\n  ... ${lines.length - previewLines.length} more lines`
-      : "";
-  return (
-    [`preview:`, ...previewLines.map((line) => `  ${truncateOneLine(line)}`)].join("\n") + suffix
-  );
-}
-
-function formatPatchTargets(input: unknown): string | undefined {
-  const patch = readInputString(input, "patchText") ?? readInputString(input, "patch");
-  if (!patch) {
-    return undefined;
-  }
-
-  const paths = new Set<string>();
-  for (const line of patch.split("\n")) {
-    const match = /^(?:\+\+\+ b\/|--- a\/|\*\*\* (?:Add|Update|Delete) File: )(.+)$/.exec(line);
-    if (match?.[1] && match[1] !== "/dev/null") {
-      paths.add(match[1].trim());
-    }
-  }
-
-  if (paths.size === 0) {
-    return undefined;
-  }
-
-  const pathList = [...paths];
-  return pathList.length <= 3
-    ? pathList.join(", ")
-    : `${pathList.slice(0, 3).join(", ")} (+${pathList.length - 3} more)`;
-}
-
-function readInputString(input: unknown, field: string): string | undefined {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return undefined;
-  }
-
-  const value = (input as Record<string, unknown>)[field];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function truncateTitle(value: string): string {
   const title = value.trim().replaceAll("\n", " ");
 
@@ -4478,12 +3960,6 @@ function isMeaningfulSession(displayTitle: string): boolean {
   return !["New empty session", "Command-only session", "Untitled session"].includes(displayTitle);
 }
 
-function truncateOneLine(value: string): string {
-  const oneLine = value.replaceAll("\n", " ");
-
-  return oneLine.length > 160 ? `${oneLine.slice(0, 160)}...` : oneLine;
-}
-
 function openExternalUrl(url: string): void {
   const command =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -4491,6 +3967,26 @@ function openExternalUrl(url: string): void {
 
   const child = spawn(command, args, { detached: true, stdio: "ignore" });
   child.unref();
+}
+
+function createAbortError(): DOMException {
+  return new DOMException("Operation aborted.", "AbortError");
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return Boolean(
+    signal?.aborted ||
+      (error instanceof Error && error.name === "AbortError") ||
+      (error instanceof DOMException && error.name === "AbortError"),
+  );
+}
+
+function createCompletion(): { promise: Promise<void>; resolve: () => void } {
+  let resolveCompletion: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  return { promise, resolve: resolveCompletion };
 }
 
 function formatError(error: unknown): string {

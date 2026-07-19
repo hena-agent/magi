@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptMessage } from "./app-controller.js";
 import {
   clampTranscriptScrollOffset,
   getSelectableTranscriptIds,
   getTranscriptLineCount,
-  getTranscriptMessageLineCount,
   getTranscriptMaxScrollOffset,
+  getTranscriptMessageLineCount,
   getTranscriptMessageLineRange,
   getTranscriptVisibleLineWindow,
   isExpandableTranscriptId,
   keepTranscriptMessageOffsetVisible,
   selectTranscriptId,
 } from "./transcript-state.js";
+import type { TranscriptMessage } from "./transcript-types.js";
 
 const messages: TranscriptMessage[] = [
   {
@@ -44,14 +44,16 @@ const messages: TranscriptMessage[] = [
     ],
   },
 ];
+const firstMessage = messages[0];
+if (!firstMessage) throw new Error("Expected transcript fixture to contain a message.");
 
-describe("transcript state helpers", () => {
+describe("transcript line state", () => {
   it("counts and windows formatted transcript lines", () => {
     expect(getTranscriptLineCount(messages, new Set())).toBe(7);
     expect(
-      getTranscriptMessageLineCount({ message: messages[0]!, expandedIds: new Set(), first: true }),
+      getTranscriptMessageLineCount({ message: firstMessage, expandedIds: new Set(), first: true }),
     ).toBe(2);
-    expect(getTranscriptMessageLineCount({ message: messages[0]!, expandedIds: new Set() })).toBe(
+    expect(getTranscriptMessageLineCount({ message: firstMessage, expandedIds: new Set() })).toBe(
       3,
     );
 
@@ -83,7 +85,9 @@ describe("transcript state helpers", () => {
       }),
     ).toEqual({ start: 2, end: 9 });
   });
+});
 
+describe("transcript navigation state", () => {
   it("selects selectable transcript ids", () => {
     expect(getSelectableTranscriptIds(messages)).toEqual([
       "user-1",

@@ -10,11 +10,7 @@
     "build": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json",
     "dev": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
     "start": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json && node dist/index.js",
-    "start:opentui": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json && node dist/opentui-info.js",
-    "start:opentui:info": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json && node dist/opentui-info.js",
-    "start:opentui:native": "pnpm --filter @magi/core build && tsc --project tsconfig.build.json && MAGI_OPENTUI_NATIVE=1 node --import 'data:text/javascript,import { register } from \"node:module\"; import { pathToFileURL } from \"node:url\"; register(\"./dist/opentui-node-loader.js\", pathToFileURL(\"./\"));' dist/opentui-index.js",
     "start:tsx": "pnpm --filter @magi/core build && tsx src/index.tsx",
-    "start:opentui:tsx": "pnpm --filter @magi/tui start:opentui:native",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
@@ -22,8 +18,6 @@
     "@magi/config": "workspace:*",
     "@magi/core": "workspace:*",
     "@magi/harness": "workspace:*",
-    "@opentui/core": "^0.4.3",
-    "@opentui/react": "^0.4.3",
     "ink": "^6.5.1",
     "react": "^19.2.3"
   },

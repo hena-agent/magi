@@ -1,5 +1,5 @@
-import type { TranscriptMessage } from "./app-controller.js";
 import { formatTranscriptMessageLines, type TranscriptLine } from "./transcript-format.js";
+import type { TranscriptMessage } from "./transcript-types.js";
 
 export const transcriptLineLimit = 28;
 
@@ -137,7 +137,7 @@ export function selectTranscriptId(input: {
   if (selectableIds.length === 0) return undefined;
 
   const currentIndex = input.selectedId
-    ? selectableIds.findIndex((id) => id === input.selectedId)
+    ? selectableIds.indexOf(input.selectedId)
     : selectableIds.length - 1;
   const normalizedIndex = currentIndex === -1 ? selectableIds.length - 1 : currentIndex;
   const nextIndex = Math.max(

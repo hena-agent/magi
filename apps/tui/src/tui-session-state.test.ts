@@ -1,9 +1,14 @@
-import { createSessionStore } from "@magi/core";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSessionStore, type SessionEventType } from "@magi/core";
 import { describe, expect, it } from "vitest";
-import { createInitialSession, createSessionStartMessage } from "./tui-session-state.js";
+import {
+  createInitialSession,
+  createSessionStartMessage,
+  getLatestAgentId,
+  getRestoredModelProviderId,
+} from "./tui-session-state.js";
 
 const modelProviders: [] = [];
 
@@ -50,3 +55,55 @@ describe("TUI session state helpers", () => {
     }
   });
 });
+
+describe("getLatestAgentId", () => {
+  it("restores the latest persisted agent switch", () => {
+    expect(
+      getLatestAgentId([
+        event("agent_switch", { agentId: "plan" }),
+        event("agent_switch", { agentId: "build" }),
+      ]),
+    ).toBe("build");
+  });
+
+  it("uses the default agent without a valid switch", () => {
+    expect(getLatestAgentId([event("summary", {})])).toBe("build");
+  });
+});
+
+describe("getRestoredModelProviderId", () => {
+  it("restores a provider that still exists", () => {
+    expect(
+      getRestoredModelProviderId(
+        [event("model_switch", { providerId: "custom", model: "custom-model" })],
+        {
+          workspaceRoot: mkdtempSync(join(tmpdir(), "magi-tui-session-state-")),
+          modelProviders: [{ id: "custom", provider: "custom", model: "custom-model" }],
+        },
+      ),
+    ).toBe("custom");
+  });
+
+  it("falls back to the current default when the persisted provider was removed", () => {
+    expect(
+      getRestoredModelProviderId(
+        [event("model_switch", { providerId: "removed", model: "old-model" })],
+        {
+          workspaceRoot: mkdtempSync(join(tmpdir(), "magi-tui-session-state-")),
+          modelProviders: [],
+        },
+      ),
+    ).toBe("openai");
+  });
+});
+
+function event(type: SessionEventType, payload: unknown) {
+  return {
+    id: crypto.randomUUID(),
+    sessionId: "session",
+    sequence: 1,
+    type,
+    payload,
+    createdAt: new Date().toISOString(),
+  };
+}

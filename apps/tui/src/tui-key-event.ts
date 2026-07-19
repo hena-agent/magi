@@ -7,16 +7,6 @@ export type TuiKeyEvent = {
   super: boolean;
 };
 
-export type OpenTuiKeyLike = {
-  name?: string;
-  raw?: string;
-  sequence?: string;
-  ctrl?: boolean;
-  meta?: boolean;
-  shift?: boolean;
-  super?: boolean;
-};
-
 export type InkKeyLike = {
   backspace?: boolean;
   ctrl?: boolean;
@@ -52,38 +42,43 @@ const nonPrintableKeyNames = new Set([
   "up",
 ]);
 
-export function normalizeOpenTuiKeyEvent(key: OpenTuiKeyLike): TuiKeyEvent {
-  const name = normalizeKeyName(key.name ?? "");
-  const ctrl = key.ctrl === true;
-  const meta = key.meta === true;
-  const shift = key.shift === true;
-  const superKey = key.super === true;
-  const raw = key.raw ?? key.sequence ?? "";
-
-  return {
-    name,
-    input: readPrintableInput({ name, raw, ctrl, meta, super: superKey }),
-    ctrl,
-    meta,
-    shift,
-    super: superKey,
-  };
-}
-
 export function normalizeInkInputEvent(input: string, key: InkKeyLike): TuiKeyEvent {
   const name = readInkKeyName(input, key);
+  const raw = stripInkBracketedPasteMarkers(input);
   const ctrl = key.ctrl === true;
   const meta = key.meta === true;
   const shift = key.shift === true;
 
   return {
     name,
-    input: readPrintableInput({ name, raw: input, ctrl, meta, super: false }),
+    input: readPrintableInput({ name, raw, ctrl, meta, super: false }),
     ctrl,
     meta,
     shift,
     super: false,
   };
+}
+
+export function stripInkBracketedPasteMarkers(input: string): string {
+  const escapeCharacter = String.fromCharCode(27);
+  const startMarkers = [`${escapeCharacter}[200~`, "[200~"];
+  const endMarkers = [`${escapeCharacter}[201~`, "[201~"];
+  let value = input;
+
+  for (const marker of startMarkers) {
+    if (value.startsWith(marker)) {
+      value = value.slice(marker.length);
+      break;
+    }
+  }
+  for (const marker of endMarkers) {
+    if (value.endsWith(marker)) {
+      value = value.slice(0, -marker.length);
+      break;
+    }
+  }
+
+  return value;
 }
 
 export function isExitKey(event: TuiKeyEvent): boolean {
@@ -142,7 +137,7 @@ function readPrintableInput(input: {
 }): string {
   if (input.ctrl || input.meta || input.super) return "";
   if (nonPrintableKeyNames.has(input.name)) return "";
-  if (input.raw.length === 1) return input.raw;
+  if (input.raw.length > 0) return input.raw;
   if (input.name.length === 1) return input.name;
   if (input.name === "space") return " ";
   return "";

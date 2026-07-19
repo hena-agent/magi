@@ -1,4 +1,4 @@
-import type { TranscriptMessage, TranscriptPart } from "./app-controller.js";
+import type { TranscriptMessage, TranscriptPart } from "./transcript-types.js";
 
 export function upsertTranscriptPart(
   message: TranscriptMessage,
@@ -20,15 +20,21 @@ export function mergeTranscriptPart(
   next: TranscriptPart,
 ): TranscriptPart {
   if (existing.type === "tool" && next.type === "tool") {
+    const status = laterToolStatus(existing.state.status, next.state.status);
+    const nextState = definedEntries(next.state);
     return {
       ...existing,
       ...next,
       state: {
         ...existing.state,
-        ...next.state,
+        ...nextState,
+        status,
         metadata: { ...existing.state.metadata, ...next.state.metadata },
         time: {
-          start: existing.state.time.start,
+          start:
+            next.state.metadata?.durationMs === undefined
+              ? existing.state.time.start
+              : next.state.time.start,
           end: next.state.time.end ?? existing.state.time.end,
         },
       },
@@ -44,6 +50,21 @@ export function mergeTranscriptPart(
   }
 
   return next;
+}
+
+function definedEntries<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, child]) => child !== undefined),
+  ) as Partial<T>;
+}
+
+function laterToolStatus(
+  existing: Extract<TranscriptPart, { type: "tool" }>["state"]["status"],
+  next: Extract<TranscriptPart, { type: "tool" }>["state"]["status"],
+): Extract<TranscriptPart, { type: "tool" }>["state"]["status"] {
+  const rank = (status: typeof existing): number =>
+    status === "pending" ? 0 : status === "running" ? 1 : 2;
+  return rank(next) >= rank(existing) ? next : existing;
 }
 
 export function findToolInput(messages: TranscriptMessage[], toolCallId: string): unknown {

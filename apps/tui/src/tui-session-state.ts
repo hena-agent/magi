@@ -1,11 +1,13 @@
 import type { loadConfig } from "@magi/config";
 import {
+  getDefaultModelSelection,
   getEffectiveModelProviderSummaries,
   getLatestModelSelection,
   type Session,
+  type SessionEvent,
   type SessionStore,
 } from "@magi/core";
-import type { TranscriptMessage } from "./app-controller.js";
+import type { TranscriptMessage } from "./transcript-types.js";
 
 type TuiSessionConfig = Pick<
   ReturnType<typeof loadConfig>,
@@ -38,15 +40,35 @@ export function getInitialModelProviderId(
   config: TuiSessionConfig,
 ): string | undefined {
   const events = initialSession.session ? store.listEvents(initialSession.session.id) : [];
+  return getRestoredModelProviderId(events, config);
+}
+
+export function getRestoredModelProviderId(
+  events: SessionEvent[],
+  config: Pick<TuiSessionConfig, "modelProviders" | "workspaceRoot">,
+): string | undefined {
+  const modelProviders = getEffectiveModelProviderSummaries({
+    configProviders: config.modelProviders,
+    workspaceRoot: config.workspaceRoot,
+  });
   const selection = getLatestModelSelection({
     events,
-    modelProviders: getEffectiveModelProviderSummaries({
-      configProviders: config.modelProviders,
-      workspaceRoot: config.workspaceRoot,
-    }),
+    modelProviders,
   });
 
-  return selection?.providerId;
+  return modelProviders.some((provider) => provider.id === selection?.providerId)
+    ? selection?.providerId
+    : getDefaultModelSelection({ modelProviders })?.providerId;
+}
+
+export function getLatestAgentId(events: SessionEvent[], fallback = "build"): string {
+  let agentId = fallback;
+  for (const event of events) {
+    if (event.type !== "agent_switch") continue;
+    const payload = event.payload as { agentId?: unknown };
+    if (typeof payload.agentId === "string") agentId = payload.agentId;
+  }
+  return agentId;
 }
 
 export function createSystemMessage(

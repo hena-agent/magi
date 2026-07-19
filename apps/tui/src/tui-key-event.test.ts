@@ -1,57 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { isExitKey, normalizeInkInputEvent, normalizeOpenTuiKeyEvent } from "./tui-key-event.js";
-
-describe("normalizeOpenTuiKeyEvent", () => {
-  it("normalizes named navigation keys", () => {
-    expect(normalizeOpenTuiKeyEvent({ name: "upArrow" })).toMatchObject({
-      name: "up",
-      input: "",
-    });
-    expect(normalizeOpenTuiKeyEvent({ name: "PageDown" })).toMatchObject({
-      name: "pagedown",
-      input: "",
-    });
-    expect(normalizeOpenTuiKeyEvent({ name: "enter" })).toMatchObject({
-      name: "return",
-      input: "",
-    });
-    expect(normalizeOpenTuiKeyEvent({ name: "esc" })).toMatchObject({
-      name: "escape",
-      input: "",
-    });
-  });
-
-  it("keeps printable input separate from normalized key names", () => {
-    expect(normalizeOpenTuiKeyEvent({ name: "a", raw: "a" })).toEqual({
-      name: "a",
-      input: "a",
-      ctrl: false,
-      meta: false,
-      shift: false,
-      super: false,
-    });
-    expect(normalizeOpenTuiKeyEvent({ name: "space", raw: " " }).input).toBe(" ");
-    expect(normalizeOpenTuiKeyEvent({ name: "c", raw: "c", ctrl: true }).input).toBe("");
-  });
-
-  it("preserves OpenTUI super/cmd modifiers", () => {
-    expect(normalizeOpenTuiKeyEvent({ name: "v", super: true })).toMatchObject({
-      input: "",
-      name: "v",
-      super: true,
-    });
-  });
-});
+import {
+  isExitKey,
+  normalizeInkInputEvent,
+  stripInkBracketedPasteMarkers,
+} from "./tui-key-event.js";
 
 describe("isExitKey", () => {
   it("matches ctrl+c and plain q", () => {
-    expect(isExitKey(normalizeOpenTuiKeyEvent({ name: "c", ctrl: true }))).toBe(true);
-    expect(isExitKey(normalizeOpenTuiKeyEvent({ name: "q", raw: "q" }))).toBe(true);
+    expect(isExitKey(normalizeInkInputEvent("c", { ctrl: true }))).toBe(true);
+    expect(isExitKey(normalizeInkInputEvent("q", {}))).toBe(true);
   });
 
   it("does not match modified q or plain c", () => {
-    expect(isExitKey(normalizeOpenTuiKeyEvent({ name: "q", raw: "q", meta: true }))).toBe(false);
-    expect(isExitKey(normalizeOpenTuiKeyEvent({ name: "c", raw: "c" }))).toBe(false);
+    expect(isExitKey(normalizeInkInputEvent("q", { meta: true }))).toBe(false);
+    expect(isExitKey(normalizeInkInputEvent("c", {}))).toBe(false);
   });
 });
 
@@ -90,5 +52,18 @@ describe("normalizeInkInputEvent", () => {
       input: "",
       ctrl: true,
     });
+  });
+
+  it("preserves multi-character and multiline Ink paste input", () => {
+    expect(normalizeInkInputEvent("/model", {}).input).toBe("/model");
+    expect(normalizeInkInputEvent("first\nsecond", {}).input).toBe("first\nsecond");
+  });
+
+  it("removes Ink bracketed paste markers without dropping newlines", () => {
+    const escapeCharacter = String.fromCharCode(27);
+    const paste = `[200~first line\nsecond line${escapeCharacter}[201~`;
+
+    expect(stripInkBracketedPasteMarkers(paste)).toBe("first line\nsecond line");
+    expect(normalizeInkInputEvent(paste, {}).input).toBe("first line\nsecond line");
   });
 });
