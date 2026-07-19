@@ -1,6 +1,5 @@
 import { jsonSchema } from "ai";
-import type { ModelToolCall } from "./model.js";
-import type { ModelToolDefinition } from "./model.js";
+import type { ModelToolCall, ModelToolDefinition } from "./model.js";
 
 export function formatToolDefinitions(tools: ModelToolDefinition[]) {
   return Object.fromEntries(

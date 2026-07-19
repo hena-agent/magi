@@ -54,6 +54,7 @@ export type LoadModelsDevCatalogInput = {
   cachePath?: string;
   maxAgeMs?: number;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
 };
 
 const defaultSourceUrl = "https://models.dev/api.json";
@@ -71,10 +72,13 @@ export async function loadModelsDevCatalog(
     const catalog = await fetchModelsDevCatalog({
       url: input.sourceUrl ?? defaultSourceUrl,
       fetch: input.fetch ?? fetch,
+      signal: input.signal,
     });
+    input.signal?.throwIfAborted();
     writeCatalogCache(cachePath, catalog);
     return catalog;
   } catch (error) {
+    if (input.signal?.aborted) throw error;
     if (cached.catalog) return cached.catalog;
     throw new Error(
       `Failed to load Models.dev catalog: ${error instanceof Error ? error.message : String(error)}`,
@@ -92,9 +96,11 @@ export function getModelsDevCachePath(input: {
 async function fetchModelsDevCatalog(input: {
   url: string;
   fetch: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<ModelsDevCatalog> {
   const response = await input.fetch(input.url, {
     headers: { "user-agent": "magi/models-dev" },
+    signal: input.signal,
   });
 
   if (!response.ok) {

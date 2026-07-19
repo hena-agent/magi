@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCommandResult, runVerificationCommand } from "./index.js";
+import { createCommandResult, runVerificationCommand, runVerificationCommands } from "./index.js";
 
 describe("createCommandResult", () => {
   it("marks zero exit codes as passed", () => {
@@ -22,5 +22,34 @@ describe("runVerificationCommand", () => {
     await expect(
       runVerificationCommand({ command: 'node -e "process.exit(2)"', cwd: process.cwd() }),
     ).resolves.toMatchObject({ status: "failed", exitCode: 2 });
+  });
+
+  it("reports caller cancellation as interrupted", async () => {
+    const controller = new AbortController();
+    const operation = runVerificationCommand({
+      command: 'node -e "setTimeout(() => {}, 10000)"',
+      cwd: process.cwd(),
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(operation).resolves.toMatchObject({ status: "interrupted" });
+  });
+});
+
+describe("runVerificationCommands", () => {
+  it("does not start later commands after interruption", async () => {
+    const controller = new AbortController();
+    const operation = runVerificationCommands({
+      commands: [
+        'node -e "setTimeout(() => {}, 10000)"',
+        "node -e \"process.stdout.write('should not run')\"",
+      ],
+      cwd: process.cwd(),
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(operation).resolves.toMatchObject([{ status: "interrupted" }]);
   });
 });

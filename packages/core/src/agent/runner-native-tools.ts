@@ -3,13 +3,13 @@ import type { ModelToolCall } from "../model.js";
 import type { ToolName } from "../tools.js";
 import type { ExecutableAgentAction } from "./actions.js";
 import type { AgentInfo } from "./registry.js";
-import { readWebsearchNativeAction } from "./runner-native-websearch.js";
 import {
   editNativeToolDefinitions,
   networkNativeToolDefinitions,
   patchNativeToolDefinitions,
   readNativeToolDefinitions,
 } from "./runner-native-tool-definitions.js";
+import { readWebsearchNativeAction } from "./runner-native-websearch.js";
 
 export function getNativeToolDefinitions(agent: AgentInfo, model: string | undefined) {
   const readTools =

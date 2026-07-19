@@ -27,6 +27,20 @@ it("lists TypeScript document symbols through the LSP tool", async () => {
   expect(result.output).toContain("answer");
 });
 
+it("rejects a cancelled LSP operation as an AbortError", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-lsp-test-"));
+  writeFileSync(join(workspaceRoot, "sample.ts"), "export const answer = 42;\n");
+  const controller = new AbortController();
+  const operation = runTool(createToolCall("lsp_symbols", { filePath: "sample.ts" }), {
+    workspaceRoot,
+    signal: controller.signal,
+  });
+
+  controller.abort();
+
+  await expect(operation).rejects.toMatchObject({ name: "AbortError" });
+});
+
 it("shows TypeScript call hierarchy through the LSP tool", async () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-lsp-test-"));
   mkdirSync(join(workspaceRoot, "src"));

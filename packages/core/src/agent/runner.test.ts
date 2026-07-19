@@ -1,7 +1,7 @@
 // biome-ignore lint/style/noExcessiveLinesPerFile: runner integration cases share compact test fixtures.
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getAgent } from "./registry.js";
-import { runEventDrivenAgent } from "./runner.js";
+import { type AgentRunEvent, runEventDrivenAgent } from "./runner.js";
 
 it("uses native tool calls before falling back to JSON actions", async () => {
   const executed: string[] = [];
@@ -548,6 +548,136 @@ it("stops at a safe point when interrupted", async () => {
 
   expect(result.status).toBe("interrupted");
   expect(result.finalText).toBe("Agent run interrupted.");
+});
+
+it("aborts an in-flight native model step without JSON fallback or provider errors", async () => {
+  const controller = new AbortController();
+  const events: AgentRunEvent[] = [];
+  let generateTextCalls = 0;
+  let modelStarted = false;
+  const run = runEventDrivenAgent({
+    engine: {
+      async generateText() {
+        generateTextCalls += 1;
+        return { text: JSON.stringify({ type: "finish", summary: "fallback" }) };
+      },
+      async generateStep(input) {
+        modelStarted = true;
+        return new Promise((_, reject) => {
+          input.signal?.addEventListener("abort", () => reject(input.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+    },
+    userMessage: "Stop in flight",
+    signal: controller.signal,
+    onEvent(event) {
+      events.push(event);
+    },
+    async executeAction() {
+      return "unused";
+    },
+  });
+
+  await vi.waitFor(() => expect(modelStarted).toBe(true));
+  controller.abort();
+  const result = await run;
+
+  expect(result.status).toBe("interrupted");
+  expect(generateTextCalls).toBe(0);
+  expect(events.filter((event) => event.type === "provider_error")).toHaveLength(0);
+  expect(
+    events.filter(
+      (event) => event.type === "agent_step_ended" && event.payload.status === "interrupted",
+    ),
+  ).toHaveLength(1);
+});
+
+it("keeps a non-cooperative model response interrupted after abort", async () => {
+  const controller = new AbortController();
+  const events: AgentRunEvent[] = [];
+  let resolveModel: (value: { text: string }) => void = () => undefined;
+  const response = new Promise<{ text: string }>((resolve) => {
+    resolveModel = resolve;
+  });
+  const run = runEventDrivenAgent({
+    engine: { generateText: async () => response },
+    userMessage: "Stop in flight",
+    signal: controller.signal,
+    onEvent(event) {
+      events.push(event);
+    },
+    async executeAction() {
+      return "unused";
+    },
+  });
+
+  await vi.waitFor(() =>
+    expect(events.some((event) => event.type === "assistant_started")).toBe(true),
+  );
+  controller.abort();
+  resolveModel({ text: JSON.stringify({ type: "finish", summary: "late answer" }) });
+
+  await expect(run).resolves.toMatchObject({
+    status: "interrupted",
+    finalText: "Agent run interrupted.",
+  });
+  expect(
+    events.filter(
+      (event) => event.type === "agent_step_ended" && event.payload.status === "interrupted",
+    ),
+  ).toHaveLength(1);
+  expect(
+    events.filter(
+      (event) => event.type === "agent_step_ended" && event.payload.status === "completed",
+    ),
+  ).toHaveLength(0);
+});
+
+it("reports interruption when final response generation is aborted", async () => {
+  const controller = new AbortController();
+  const events: AgentRunEvent[] = [];
+  let finalStarted = false;
+  const run = runEventDrivenAgent({
+    engine: {
+      async generateText(input) {
+        finalStarted = true;
+        return new Promise((_, reject) => {
+          input.signal?.addEventListener("abort", () => reject(input.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+      async generateStep() {
+        return {
+          text: "",
+          toolCalls: [{ id: "read-1", name: "read", input: { path: "README.md" } }],
+        };
+      },
+    },
+    userMessage: "Read once",
+    signal: controller.signal,
+    maxIterations: 1,
+    onEvent(event) {
+      events.push(event);
+    },
+    async executeAction() {
+      return "contents";
+    },
+  });
+
+  await vi.waitFor(() => expect(finalStarted).toBe(true));
+  controller.abort();
+  const result = await run;
+
+  expect(result).toMatchObject({ status: "interrupted", finalText: "Agent run interrupted." });
+  expect(events.filter((event) => event.type === "provider_error")).toHaveLength(0);
+  expect(
+    events.filter(
+      (event) => event.type === "agent_step_ended" && event.payload.status === "interrupted",
+    ),
+  ).toHaveLength(1);
 });
 
 it("injects plan reminders only into the system prompt and filters denied plan actions", async () => {

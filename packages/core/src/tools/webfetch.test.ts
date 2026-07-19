@@ -63,6 +63,23 @@ it("includes non-2xx responses as observations instead of throwing", async () =>
   expect(output).toContain("not found");
 });
 
+it("preserves caller cancellation as an AbortError", async () => {
+  const controller = new AbortController();
+  stubFetch(async (_url, init) => {
+    return await new Promise<Response>((_, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    });
+  });
+
+  const operation = webfetchTool(
+    { url: "https://example.com" },
+    { workspaceRoot: process.cwd(), signal: controller.signal },
+  );
+  controller.abort();
+
+  await expect(operation).rejects.toMatchObject({ name: "AbortError" });
+});
+
 it("truncates large rendered response bodies with metadata", async () => {
   stubFetch(response("a".repeat(200_010), { contentType: "text/plain" }));
 
@@ -72,10 +89,16 @@ it("truncates large rendered response bodies with metadata", async () => {
   expect(output.length).toBeLessThan(200_200);
 });
 
-function stubFetch(responseValue: Response): void {
+function stubFetch(
+  responseValue: Response | ((url: string | URL, init: RequestInit) => Promise<Response>),
+): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => responseValue),
+    vi.fn((url: string | URL, init?: RequestInit) => {
+      return typeof responseValue === "function"
+        ? responseValue(url, init ?? {})
+        : Promise.resolve(responseValue);
+    }),
   );
 }
 

@@ -57,4 +57,5 @@ export type ToolSettlement = {
 
 export type ToolRuntime = {
   workspaceRoot: string;
+  signal?: AbortSignal;
 };

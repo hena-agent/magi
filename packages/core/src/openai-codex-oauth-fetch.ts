@@ -5,16 +5,36 @@ import { OPENAI_CODEX_API_ENDPOINT } from "./openai-codex-oauth-constants.js";
 import { refreshOpenAICodexAuth } from "./openai-codex-oauth-tokens.js";
 import { copyHeadersWithoutAuthorization, userAgent } from "./openai-codex-oauth-utils.js";
 
+export const RAW_MODEL_LOGGING_ENV = "MAGI_RAW_MODEL_LOGGING";
+
+type RefreshOperation = {
+  controller: AbortController;
+  promise: Promise<OAuthAuth>;
+  waiters: number;
+};
+
+export function isRawModelLoggingEnabled(): boolean {
+  return process.env[RAW_MODEL_LOGGING_ENV] === "1";
+}
+
 export function createOpenAICodexOAuthFetch(input: {
   workspaceRoot: string;
   sessionId?: string;
 }): typeof fetch {
-  let refreshPromise: Promise<OAuthAuth> | undefined;
+  let refreshOperation: RefreshOperation | undefined;
 
   return async (requestInput, init) => {
-    const auth = await resolveAuth(input.workspaceRoot, refreshPromise, (promise) => {
-      refreshPromise = promise;
-    });
+    const auth = await resolveAuth(
+      input.workspaceRoot,
+      refreshOperation,
+      (operation) => {
+        refreshOperation = operation;
+      },
+      (operation) => {
+        if (refreshOperation === operation) refreshOperation = undefined;
+      },
+      init?.signal ?? undefined,
+    );
     const headers = authHeaders(auth, init?.headers, input.sessionId);
     await appendOpenAIRequestLog(input.workspaceRoot, requestInput, init).catch(() => undefined);
 
@@ -27,6 +47,8 @@ async function appendOpenAIRequestLog(
   requestInput: Parameters<typeof fetch>[0],
   init: RequestInit | undefined,
 ): Promise<void> {
+  if (!isRawModelLoggingEnabled()) return;
+
   const url =
     requestInput instanceof URL
       ? requestInput
@@ -60,8 +82,10 @@ function parseJsonBody(body: string): unknown {
 
 async function resolveAuth(
   workspaceRoot: string,
-  refreshPromise: Promise<OAuthAuth> | undefined,
-  setRefreshPromise: (promise: Promise<OAuthAuth> | undefined) => void,
+  refreshOperation: RefreshOperation | undefined,
+  setRefreshOperation: (operation: RefreshOperation | undefined) => void,
+  clearRefreshOperation: (operation: RefreshOperation) => void,
+  signal?: AbortSignal,
 ): Promise<OAuthAuth> {
   const current = getOpenAICodexAuth(workspaceRoot);
 
@@ -69,8 +93,11 @@ async function resolveAuth(
     return current;
   }
 
-  const promise = refreshPromise ?? queueRefresh(workspaceRoot, current, setRefreshPromise);
-  return promise;
+  const operation =
+    refreshOperation && !refreshOperation.controller.signal.aborted
+      ? refreshOperation
+      : queueRefresh(workspaceRoot, current, setRefreshOperation, clearRefreshOperation);
+  return waitForRefresh(operation, signal);
 }
 
 function getOpenAICodexAuth(workspaceRoot: string): OAuthAuth {
@@ -86,14 +113,51 @@ function getOpenAICodexAuth(workspaceRoot: string): OAuthAuth {
 function queueRefresh(
   workspaceRoot: string,
   auth: OAuthAuth,
-  setRefreshPromise: (promise: Promise<OAuthAuth> | undefined) => void,
-): Promise<OAuthAuth> {
-  const promise = refreshOpenAICodexAuth({ workspaceRoot, auth }).finally(() => {
-    setRefreshPromise(undefined);
-  });
+  setRefreshOperation: (operation: RefreshOperation | undefined) => void,
+  clearRefreshOperation: (operation: RefreshOperation) => void,
+): RefreshOperation {
+  const controller = new AbortController();
+  const operation = {
+    controller,
+    promise: refreshOpenAICodexAuth({ workspaceRoot, auth, signal: controller.signal }),
+    waiters: 0,
+  };
+  setRefreshOperation(operation);
+  void operation.promise.then(
+    () => clearRefreshOperation(operation),
+    () => clearRefreshOperation(operation),
+  );
+  return operation;
+}
 
-  setRefreshPromise(promise);
-  return promise;
+async function waitForRefresh(
+  operation: RefreshOperation,
+  signal?: AbortSignal,
+): Promise<OAuthAuth> {
+  operation.waiters += 1;
+  try {
+    signal?.throwIfAborted();
+    if (!signal) return await operation.promise;
+    return await new Promise<OAuthAuth>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+      void operation.promise.then(
+        (auth) => {
+          cleanup();
+          resolve(auth);
+        },
+        (error: unknown) => {
+          cleanup();
+          reject(error);
+        },
+      );
+      if (signal.aborted) onAbort();
+    });
+  } finally {
+    operation.waiters -= 1;
+    if (signal?.aborted && operation.waiters === 0) operation.controller.abort(signal.reason);
+  }
 }
 
 function authHeaders(

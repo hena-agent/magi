@@ -1,4 +1,4 @@
-import { evaluateConsensus, type ConsensusResult } from "./consensus.js";
+import { type ConsensusResult, evaluateConsensus } from "./consensus.js";
 import type { ReviewResponse } from "./review.js";
 import type { SharedContextHistory } from "./shared-context.js";
 import type { VoteResponse } from "./vote.js";

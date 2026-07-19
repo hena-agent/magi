@@ -9,6 +9,7 @@ type PendingOAuth = {
   state: string;
   resolve: (tokens: TokenResponse) => void;
   reject: (error: Error) => void;
+  signal?: AbortSignal;
 };
 
 let oauthServer: ReturnType<typeof createServer> | undefined;
@@ -34,22 +35,50 @@ export function stopOAuthServer(): void {
   }
 }
 
-export function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResponse> {
+export function cancelPendingOAuth(error = new Error("Login cancelled")): void {
+  const current = pendingOAuth;
+  pendingOAuth = undefined;
+  current?.reject(error);
+}
+
+export function waitForOAuthCallback(
+  pkce: PkceCodes,
+  state: string,
+  signal?: AbortSignal,
+): Promise<TokenResponse> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => rejectTimedOutOAuth(reject), 5 * 60 * 1_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      pendingOAuth = undefined;
+      cleanup();
+      reject(new DOMException("Operation aborted", "AbortError"));
+    };
+    const timeout = setTimeout(
+      () => {
+        cleanup();
+        rejectTimedOutOAuth(reject);
+      },
+      5 * 60 * 1_000,
+    );
 
     pendingOAuth = {
       pkce,
       state,
+      signal,
       resolve: (tokens) => {
-        clearTimeout(timeout);
+        cleanup();
         resolve(tokens);
       },
       reject: (error) => {
-        clearTimeout(timeout);
+        cleanup();
         reject(error);
       },
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
@@ -101,14 +130,13 @@ function resolvePendingOAuth(code: string): void {
     return;
   }
 
-  exchangeCodeForTokens(code, oauthServerLocation().redirectUri, current.pkce)
+  exchangeCodeForTokens(code, oauthServerLocation().redirectUri, current.pkce, current.signal)
     .then((tokens) => current.resolve(tokens))
     .catch((error: unknown) => current.reject(normalizeError(error)));
 }
 
 function cancelOAuth(res: ServerResponse): void {
-  pendingOAuth?.reject(new Error("Login cancelled"));
-  pendingOAuth = undefined;
+  cancelPendingOAuth();
   res.writeHead(200);
   res.end("Login cancelled");
 }
@@ -129,10 +157,20 @@ function rejectPendingOAuth(message: string, res: ServerResponse, status = 200):
 
 function listenOAuthServer(): Promise<{ port: number; redirectUri: string }> {
   return new Promise((resolve, reject) => {
-    oauthServer?.listen(OPENAI_CODEX_OAUTH_PORT, () => {
+    const server = oauthServer;
+    if (!server) {
+      reject(new Error("OAuth callback server is unavailable"));
+      return;
+    }
+    const onError = (error: Error) => {
+      if (oauthServer === server) oauthServer = undefined;
+      reject(error);
+    };
+    server.once("error", onError);
+    server.listen(OPENAI_CODEX_OAUTH_PORT, () => {
+      server.removeListener("error", onError);
       resolve(oauthServerLocation());
     });
-    oauthServer?.on("error", reject);
   });
 }
 

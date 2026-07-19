@@ -1,5 +1,5 @@
-import type { SharedContextHistory } from "./shared-context.js";
 import type { ReviewLens } from "./lenses.js";
+import type { SharedContextHistory } from "./shared-context.js";
 import { assertAllowedKeys, isObject, readBoundedNumber, readNonEmptyString } from "./vote.js";
 
 export type ReviewSeverity = "info" | "warning" | "error";

@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getOptionalStringField, readObject } from "./input.js";
-import { resolveWorkspacePath } from "./path.js";
 import { applyMagiPatch, looksLikeMagiPatch } from "./patch.js";
+import { resolveWorkspacePath } from "./path.js";
 import type { ToolRuntime } from "./types.js";
 
 export function applyPatchTool(input: unknown, runtime: ToolRuntime): string {

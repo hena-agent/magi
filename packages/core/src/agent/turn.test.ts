@@ -102,3 +102,20 @@ it("emits lifecycle and provider error events", async () => {
     "agent_step_ended",
   ]);
 });
+
+it("preserves interrupted status", async () => {
+  const result = await runAgentTurn({
+    engine: {
+      async generateText() {
+        return { text: JSON.stringify({ type: "finish", summary: "unused" }) };
+      },
+    },
+    userMessage: "Stop",
+    shouldInterrupt: () => true,
+    async executeAction() {
+      return "unused";
+    },
+  });
+
+  expect(result.status).toBe("interrupted");
+});

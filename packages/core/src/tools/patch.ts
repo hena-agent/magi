@@ -1,9 +1,9 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { relative } from "node:path";
-import { resolveWorkspacePath, toPosix, writeFileWithDirs } from "./path.js";
 import { parseMagiPatch } from "./patch-parser.js";
 import type { PatchHunk } from "./patch-types.js";
 import { deriveUpdatedContents } from "./patch-update.js";
+import { resolveWorkspacePath, toPosix, writeFileWithDirs } from "./path.js";
 import type { ToolRuntime } from "./types.js";
 
 export function looksLikeMagiPatch(patchText: string): boolean {

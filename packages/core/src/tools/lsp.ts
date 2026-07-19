@@ -1,13 +1,14 @@
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { spawn } from "node:child_process";
 import {
   createMessageConnection,
+  type MessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
-  type MessageConnection,
 } from "vscode-jsonrpc/node";
+import { getNumberField, getStringField, readObject } from "./input.js";
 import {
   formatCallHierarchy,
   formatHover,
@@ -15,7 +16,6 @@ import {
   formatSymbols,
   type LspCallHierarchyDirection,
 } from "./lsp-format.js";
-import { getNumberField, getStringField, readObject } from "./input.js";
 import { resolveWorkspacePath } from "./path.js";
 import type { ToolRuntime } from "./types.js";
 
@@ -50,17 +50,35 @@ export async function lspTool(
   const filePath = resolveWorkspacePath(runtime.workspaceRoot, inputObject.filePath);
   const uri = pathToFileURL(filePath).toString();
   const text = readFileSync(filePath, "utf8");
+  if (runtime.signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
   const client = startTypescriptLanguageServer(runtime.workspaceRoot);
+  let abortCleanup: Promise<void> | undefined;
+  const abort = () => {
+    abortCleanup ??= abortTypescriptLanguageServer(client);
+  };
+  runtime.signal?.addEventListener("abort", abort, { once: true });
 
   try {
-    await withTimeout(initializeLsp(client.connection, runtime.workspaceRoot), "initialize LSP");
+    await withTimeout(
+      initializeLsp(client.connection, runtime.workspaceRoot),
+      "initialize LSP",
+      runtime.signal,
+    );
     client.connection.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId: languageIdForFile(filePath), version: 1, text },
     });
 
-    return await executeLspRequest(toolName, client.connection, uri, inputObject);
+    return await executeLspRequest(toolName, client.connection, uri, inputObject, runtime.signal);
   } finally {
-    await stopTypescriptLanguageServer(client);
+    runtime.signal?.removeEventListener("abort", abort);
+    if (runtime.signal?.aborted) {
+      abort();
+      await abortCleanup;
+    } else {
+      await stopTypescriptLanguageServer(client);
+    }
   }
 }
 
@@ -69,6 +87,7 @@ async function executeLspRequest(
   connection: MessageConnection,
   uri: string,
   input: LspInput,
+  signal?: AbortSignal,
 ): Promise<string> {
   switch (toolName) {
     case "lsp_symbols":
@@ -76,6 +95,7 @@ async function executeLspRequest(
         await withTimeout(
           connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }),
           "document symbols",
+          signal,
         ),
       );
     case "lsp_definition":
@@ -86,6 +106,7 @@ async function executeLspRequest(
             position: toLspPosition(input),
           }),
           "definition",
+          signal,
         ),
       );
     case "lsp_references":
@@ -97,6 +118,7 @@ async function executeLspRequest(
             context: { includeDeclaration: true },
           }),
           "references",
+          signal,
         ),
       );
     case "lsp_hover":
@@ -107,12 +129,13 @@ async function executeLspRequest(
             position: toLspPosition(input),
           }),
           "hover",
+          signal,
         ),
       );
     case "lsp_call_hierarchy":
       return await formatCallHierarchy(
         { connection, uri, position: toLspPosition(input), direction: input.direction ?? "both" },
-        withTimeout,
+        (promise, label) => withTimeout(promise, label, signal),
       );
   }
 }
@@ -207,6 +230,13 @@ async function stopTypescriptLanguageServer(client: LspClient): Promise<void> {
   }
 }
 
+async function abortTypescriptLanguageServer(client: LspClient): Promise<void> {
+  // Let the JSON-RPC writer flush any request queued in the current turn before destroying stdin.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (!client.process.killed) client.process.kill();
+  client.connection.dispose();
+}
+
 function toLspPosition(input: { line?: number; character?: number }): {
   line: number;
   character: number;
@@ -214,8 +244,13 @@ function toLspPosition(input: { line?: number; character?: number }): {
   return { line: (input.line ?? 1) - 1, character: (input.character ?? 1) - 1 };
 }
 
-async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
+  let abort: (() => void) | undefined;
 
   try {
     return await Promise.race([
@@ -226,9 +261,15 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
           defaultTimeoutMs,
         );
       }),
+      new Promise<T>((_, reject) => {
+        abort = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+      }),
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (abort) signal?.removeEventListener("abort", abort);
   }
 }
 

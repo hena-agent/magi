@@ -1,14 +1,19 @@
 import type { PrimaryModelAdapter } from "../model.js";
+import { isAbortError } from "./abort.js";
 import { validateAgentAction } from "./actions.js";
 import { parseJsonObjectFromText } from "./json.js";
 import { type AgentInfo, getDefaultAgent } from "./registry.js";
-import type { AgentRunEvent } from "./runner-types.js";
 import {
   agentTurnSystemPrompt,
   buildAgentSystemPrompt,
   formatAgentTurnPrompt,
   summarizeStoppedTurn,
 } from "./runner-prompts.js";
+import type { AgentRunEvent } from "./runner-types.js";
+
+type FinalTextResponse =
+  | { status: "completed"; text: string }
+  | { status: "interrupted"; text: string };
 
 export async function generateFinalTextOnlyResponse(
   input: {
@@ -18,10 +23,12 @@ export async function generateFinalTextOnlyResponse(
     systemContext?: string[];
     sessionContext?: string;
     onEvent?: (event: AgentRunEvent) => void;
+    signal?: AbortSignal;
+    shouldInterrupt?: () => boolean;
   },
   observations: string[],
   runId: string,
-): Promise<string> {
+): Promise<FinalTextResponse> {
   const stepId = crypto.randomUUID();
   const agent = input.agent ?? getDefaultAgent();
   input.onEvent?.({
@@ -32,17 +39,32 @@ export async function generateFinalTextOnlyResponse(
 
   try {
     const finalText = await callFinalTextModel(input, agent, observations);
+    if (input.signal?.aborted || input.shouldInterrupt?.()) {
+      input.onEvent?.({
+        type: "agent_step_ended",
+        payload: { runId, stepId, status: "interrupted" },
+      });
+      return { status: "interrupted", text: "Agent run interrupted." };
+    }
     input.onEvent?.({ type: "agent_step_ended", payload: { runId, stepId, status: "completed" } });
 
-    return finalText;
+    return { status: "completed", text: finalText };
   } catch (error) {
+    if (isAbortError(error, input.signal)) {
+      input.onEvent?.({
+        type: "agent_step_ended",
+        payload: { runId, stepId, status: "interrupted" },
+      });
+      return { status: "interrupted", text: "Agent run interrupted." };
+    }
+
     input.onEvent?.({
       type: "provider_error",
       payload: { runId, stepId, message: formatError(error), retryable: false },
     });
     input.onEvent?.({ type: "agent_step_ended", payload: { runId, stepId, status: "failed" } });
 
-    return summarizeStoppedTurn(observations);
+    return { status: "completed", text: summarizeStoppedTurn(observations) };
   }
 }
 
@@ -52,6 +74,7 @@ async function callFinalTextModel(
     userMessage: string;
     systemContext?: string[];
     sessionContext?: string;
+    signal?: AbortSignal;
   },
   agent: AgentInfo,
   observations: string[],
@@ -68,6 +91,7 @@ async function callFinalTextModel(
       maxIterations: 1,
       isLastStep: true,
     }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   const action = validateAgentAction(parseJsonObjectFromText(response.text));
 

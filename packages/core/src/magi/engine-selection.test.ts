@@ -78,7 +78,7 @@ describe("MAGI engine pool selection", () => {
   });
 });
 
-describe("MAGI initiating engine selection", () => {
+describe("MAGI weighted initiating engine selection", () => {
   it("selects among ready engines with deterministic weighted roulette", () => {
     const pool = selectMagiEnginePool({
       env: { ANTHROPIC_API_KEY: "anthropic-key", GOOGLE_GENERATIVE_AI_API_KEY: "google-key" },
@@ -111,7 +111,9 @@ describe("MAGI initiating engine selection", () => {
       }).engine.providerId,
     ).toBe("google");
   });
+});
 
+describe("MAGI ready initiating engine selection", () => {
   it("uses equal default weights and ignores unready engines", () => {
     const result = selectMagiInitiatingEngine({
       engines: [
@@ -148,7 +150,9 @@ describe("MAGI initiating engine selection", () => {
     expect(result.totalWeight).toBe(2);
     expect(result.weights).toEqual({ openai: 1, google: 1 });
   });
+});
 
+describe("MAGI initiating engine weight safeguards", () => {
   it("keeps a minimum weight floor for invalid or depleted weights", () => {
     const result = selectMagiInitiatingEngine({
       engines: [

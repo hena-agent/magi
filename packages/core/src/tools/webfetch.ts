@@ -1,11 +1,12 @@
 import { getOptionalStringField, readObject } from "./input.js";
+import type { ToolRuntime } from "./types.js";
 
 const defaultTimeoutMs = 30_000;
 const maxTimeoutMs = 120_000;
 const maxResponseBytes = 5 * 1024 * 1024;
 const maxOutputBytes = 200_000;
 
-export async function webfetchTool(input: unknown): Promise<string> {
+export async function webfetchTool(input: unknown, runtime?: ToolRuntime): Promise<string> {
   const inputObject = readObject(input, ["url"], ["format", "timeout"]);
   const url = getOptionalStringField(inputObject, "url") ?? "";
   const format = getOptionalStringField(inputObject, "format") ?? "markdown";
@@ -19,38 +20,53 @@ export async function webfetchTool(input: unknown): Promise<string> {
     throw new Error("webfetch format must be markdown, text, or html");
   }
 
+  const response = await fetchWithTimeout(url, format, timeoutMs, runtime?.signal);
+  const contentType = response.headers.get("content-type") ?? "unknown";
+  const metadata = formatMetadata(response, contentType);
+
+  if (isUnsupportedMedia(contentType)) {
+    return [
+      metadata,
+      "",
+      `Unsupported media response omitted. Use a browser or a dedicated media tool for ${contentType}.`,
+    ].join("\n");
+  }
+
+  const text = await readLimitedResponse(response);
+  const rendered = renderResponseBody(text, contentType, format);
+  const truncated = truncateUtf8(rendered, maxOutputBytes);
+  const truncation = truncated.truncated
+    ? `\n[truncated ${truncated.omittedBytes} bytes from response body]`
+    : "";
+
+  return `${metadata}\n\n${truncated.text}${truncation}`.trim();
+}
+
+async function fetchWithTimeout(
+  url: string,
+  format: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
 
   try {
-    const response = await fetch(url, {
+    return await fetch(url, {
       signal: controller.signal,
       headers: {
         Accept: acceptHeader(format),
         "User-Agent": `magi/0.0.0 (${process.platform}; ${process.arch})`,
       },
     });
-
-    const contentType = response.headers.get("content-type") ?? "unknown";
-    const metadata = formatMetadata(response, contentType);
-
-    if (isUnsupportedMedia(contentType)) {
-      return [
-        metadata,
-        "",
-        `Unsupported media response omitted. Use a browser or a dedicated media tool for ${contentType}.`,
-      ].join("\n");
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted", "AbortError");
     }
 
-    const text = await readLimitedResponse(response);
-    const rendered = renderResponseBody(text, contentType, format);
-    const truncated = truncateUtf8(rendered, maxOutputBytes);
-    const truncation = truncated.truncated
-      ? `\n[truncated ${truncated.omittedBytes} bytes from response body]`
-      : "";
-
-    return `${metadata}\n\n${truncated.text}${truncation}`.trim();
-  } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`webfetch timed out after ${timeoutMs / 1_000}s`);
     }
@@ -58,6 +74,7 @@ export async function webfetchTool(input: unknown): Promise<string> {
     throw error;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
 }
 

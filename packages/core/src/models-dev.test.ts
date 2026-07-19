@@ -39,6 +39,31 @@ it("falls back to a stale cache when refresh fails", async () => {
   }
 });
 
+it("does not fall back to stale cache after caller cancellation", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-models-dev-abort-"));
+  const okFetch = vi.fn(async () => new Response(JSON.stringify(fixtureCatalog())));
+  const abortController = new AbortController();
+
+  try {
+    await loadModelsDevCatalog({ workspaceRoot, fetch: okFetch, maxAgeMs: -1 });
+    abortController.abort();
+
+    await expect(
+      loadModelsDevCatalog({
+        workspaceRoot,
+        maxAgeMs: -1,
+        signal: abortController.signal,
+        fetch: vi.fn(async (_url, init) => {
+          expect(init?.signal).toBe(abortController.signal);
+          throw new DOMException("Operation aborted", "AbortError");
+        }),
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function fixtureCatalog() {
   return {
     anthropic: {

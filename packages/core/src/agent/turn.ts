@@ -9,7 +9,7 @@ export type AgentTurnStep = {
 };
 
 export type AgentTurnResult = {
-  status: "completed" | "max_iterations";
+  status: "completed" | "max_iterations" | "interrupted";
   finalText: string;
   steps: AgentTurnStep[];
 };
@@ -24,13 +24,14 @@ export async function runAgentTurn(input: {
   sessionContext?: string;
   executeAction: (action: ExecutableAgentAction) => Promise<string>;
   shouldInterrupt?: () => boolean;
+  signal?: AbortSignal;
   onEvent?: (event: AgentTurnEvent) => void;
   maxIterations?: number;
 }): Promise<AgentTurnResult> {
   const result = await runEventDrivenAgent(input);
 
   return {
-    status: result.status === "interrupted" ? "max_iterations" : result.status,
+    status: result.status,
     finalText: result.finalText,
     steps: result.steps,
   };

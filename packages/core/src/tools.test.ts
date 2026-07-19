@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -50,6 +57,85 @@ it("rejects paths outside the workspace", async () => {
 
   expect(result.ok).toBe(false);
   expect(result.error).toMatch(/escapes workspace/);
+});
+
+it("rejects reads and writes through symlinks outside the workspace", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+  const outsideRoot = mkdtempSync(join(tmpdir(), "magi-tools-outside-test-"));
+  writeFileSync(join(outsideRoot, "secret.txt"), "secret\n");
+  symlinkSync(outsideRoot, join(workspaceRoot, "outside"));
+
+  await expect(
+    runTool(createToolCall("read", { path: "outside/secret.txt" }), { workspaceRoot }),
+  ).resolves.toMatchObject({ ok: false, error: expect.stringMatching(/escapes workspace/) });
+  await expect(
+    runTool(
+      createToolCall("write", { filePath: "outside/missing/nested.txt", content: "escaped" }),
+      { workspaceRoot },
+    ),
+  ).resolves.toMatchObject({ ok: false, error: expect.stringMatching(/escapes workspace/) });
+  expect(existsSync(join(outsideRoot, "missing", "nested.txt"))).toBe(false);
+});
+
+it("rejects write, edit, and patch through dangling symlinks", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+  const outsideRoot = mkdtempSync(join(tmpdir(), "magi-tools-outside-test-"));
+  const outsideFile = join(outsideRoot, "created.txt");
+  symlinkSync(outsideFile, join(workspaceRoot, "dangling.txt"));
+
+  const results = await Promise.all([
+    runTool(createToolCall("write", { filePath: "dangling.txt", content: "escaped" }), {
+      workspaceRoot,
+    }),
+    runTool(
+      createToolCall("edit", {
+        filePath: "dangling.txt",
+        oldString: "",
+        newString: "escaped",
+      }),
+      { workspaceRoot },
+    ),
+    runTool(
+      createToolCall("apply_patch", {
+        patchText: [
+          "*** Begin Patch",
+          "*** Add File: dangling.txt",
+          "+escaped",
+          "*** End Patch",
+        ].join("\n"),
+      }),
+      { workspaceRoot },
+    ),
+  ]);
+
+  expect(results).toHaveLength(3);
+  for (const result of results) {
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/dangling symlink/),
+    });
+  }
+  expect(existsSync(outsideFile)).toBe(false);
+});
+
+it("allows workspace-internal symlinks and nonexistent nested parents", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-tools-test-"));
+  mkdirSync(join(workspaceRoot, "target"));
+  writeFileSync(join(workspaceRoot, "target", "alpha.txt"), "inside\n");
+  symlinkSync(join(workspaceRoot, "target"), join(workspaceRoot, "internal"));
+
+  await expect(
+    runTool(createToolCall("read", { path: "internal/alpha.txt" }), { workspaceRoot }),
+  ).resolves.toMatchObject({ ok: true, output: "inside\n" });
+  await expect(
+    runTool(
+      createToolCall("write", { filePath: "internal/missing/nested.txt", content: "created" }),
+      { workspaceRoot },
+    ),
+  ).resolves.toMatchObject({ ok: true, output: "Wrote internal/missing/nested.txt." });
+  expect(readFileSync(join(workspaceRoot, "target", "missing", "nested.txt"), "utf8")).toBe(
+    "created",
+  );
 });
 
 it("runs edit and write tools", async () => {

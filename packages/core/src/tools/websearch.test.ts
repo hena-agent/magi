@@ -62,6 +62,26 @@ it("falls back from Exa to Parallel when provider is automatic", async () => {
   expect(result.output).toContain("parallel result");
 });
 
+it("does not fall back after caller cancellation", async () => {
+  const controller = new AbortController();
+  let callCount = 0;
+  stubFetch(async (_url, init) => {
+    callCount += 1;
+    return await new Promise<Response>((_, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    });
+  });
+
+  const operation = runTool(createToolCall("websearch", { query: "magi" }), {
+    workspaceRoot: process.cwd(),
+    signal: controller.signal,
+  });
+  controller.abort();
+
+  await expect(operation).rejects.toMatchObject({ name: "AbortError" });
+  expect(callCount).toBe(1);
+});
+
 it("normalizes Brave websearch results", async () => {
   vi.stubEnv("BRAVE_SEARCH_API_KEY", "secret");
   stubFetch(async () =>

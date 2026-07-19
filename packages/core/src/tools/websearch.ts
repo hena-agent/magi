@@ -1,4 +1,6 @@
 import { getOptionalStringField, getStringField, readObject } from "./input.js";
+import type { ToolRuntime } from "./types.js";
+import { fetchWebsearch } from "./websearch-fetch.js";
 import { parseMcpTextResponse } from "./websearch-mcp.js";
 
 export { parseMcpTextResponse } from "./websearch-mcp.js";
@@ -23,17 +25,20 @@ type SearchResult = {
 const exaUrl = "https://mcp.exa.ai/mcp";
 const parallelUrl = "https://search.parallel.ai/mcp";
 const braveUrl = "https://api.search.brave.com/res/v1/web/search";
-const timeoutMs = 25_000;
 
-export async function websearchTool(input: unknown): Promise<string> {
+export async function websearchTool(input: unknown, runtime?: ToolRuntime): Promise<string> {
   const parsed = readWebsearchInput(input);
   const providers = selectProviders(parsed.providerId);
   const failures: string[] = [];
 
   for (const provider of providers) {
     try {
-      return await callProvider(provider, parsed);
+      return await callProvider(provider, parsed, runtime?.signal);
     } catch (error) {
+      if (runtime?.signal?.aborted) {
+        throw new DOMException("The operation was aborted", "AbortError");
+      }
+
       failures.push(`${provider}: ${formatError(error)}`);
       if (parsed.providerId) break;
     }
@@ -89,35 +94,45 @@ function isWebsearchProvider(value: unknown): value is WebsearchProvider {
   return value === "exa" || value === "parallel" || value === "brave";
 }
 
-async function callProvider(provider: WebsearchProvider, input: WebsearchInput): Promise<string> {
+async function callProvider(
+  provider: WebsearchProvider,
+  input: WebsearchInput,
+  signal?: AbortSignal,
+): Promise<string> {
   switch (provider) {
     case "exa":
-      return await callExa(input);
+      return await callExa(input, signal);
     case "parallel":
-      return await callParallel(input);
+      return await callParallel(input, signal);
     case "brave":
-      return await callBrave(input);
+      return await callBrave(input, signal);
   }
 }
 
-async function callExa(input: WebsearchInput): Promise<string> {
+async function callExa(input: WebsearchInput, signal?: AbortSignal): Promise<string> {
   const url = process.env.EXA_API_KEY
     ? `${exaUrl}?exaApiKey=${encodeURIComponent(process.env.EXA_API_KEY)}`
     : exaUrl;
-  const text = await callMcpWebsearch(url, "web_search_exa", {
-    query: input.query,
-    type: input.type ?? "auto",
-    numResults: input.limit ?? 8,
-    livecrawl: input.livecrawl ?? "fallback",
-    ...(input.contextMaxCharacters === undefined
-      ? {}
-      : { contextMaxCharacters: input.contextMaxCharacters }),
-  });
+  const text = await callMcpWebsearch(
+    url,
+    "web_search_exa",
+    {
+      query: input.query,
+      type: input.type ?? "auto",
+      numResults: input.limit ?? 8,
+      livecrawl: input.livecrawl ?? "fallback",
+      ...(input.contextMaxCharacters === undefined
+        ? {}
+        : { contextMaxCharacters: input.contextMaxCharacters }),
+    },
+    {},
+    signal,
+  );
 
   return formatTextResult("exa", input.query, text);
 }
 
-async function callParallel(input: WebsearchInput): Promise<string> {
+async function callParallel(input: WebsearchInput, signal?: AbortSignal): Promise<string> {
   const headers: Record<string, string> = process.env.PARALLEL_API_KEY
     ? { Authorization: `Bearer ${process.env.PARALLEL_API_KEY}` }
     : {};
@@ -129,12 +144,13 @@ async function callParallel(input: WebsearchInput): Promise<string> {
       search_queries: [input.query],
     },
     headers,
+    signal,
   );
 
   return formatTextResult("parallel", input.query, text);
 }
 
-async function callBrave(input: WebsearchInput): Promise<string> {
+async function callBrave(input: WebsearchInput, signal?: AbortSignal): Promise<string> {
   const apiKey = process.env.BRAVE_SEARCH_API_KEY;
   if (!apiKey) {
     throw new Error("Missing BRAVE_SEARCH_API_KEY");
@@ -143,13 +159,17 @@ async function callBrave(input: WebsearchInput): Promise<string> {
   const url = new URL(braveUrl);
   url.searchParams.set("q", input.query);
   url.searchParams.set("count", String(input.limit ?? 8));
-  const response = await fetchWithTimeout(url, {
-    headers: {
-      Accept: "application/json",
-      "X-Subscription-Token": apiKey,
-      "User-Agent": `magi/0.0.0 (${process.platform}; ${process.arch})`,
+  const response = await fetchWebsearch(
+    url,
+    {
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": apiKey,
+        "User-Agent": `magi/0.0.0 (${process.platform}; ${process.arch})`,
+      },
     },
-  });
+    signal,
+  );
   const body = await response.text();
 
   if (!response.ok) {
@@ -164,22 +184,27 @@ async function callMcpWebsearch(
   toolName: string,
   args: Record<string, unknown>,
   headers: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<string> {
-  const response = await fetchWithTimeout(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json, text/event-stream",
-      "Content-Type": "application/json",
-      "User-Agent": `magi/0.0.0 (${process.platform}; ${process.arch})`,
-      ...headers,
+  const response = await fetchWebsearch(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "User-Agent": `magi/0.0.0 (${process.platform}; ${process.arch})`,
+        ...headers,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: toolName, arguments: args },
+      }),
     },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: toolName, arguments: args },
-    }),
-  });
+    signal,
+  );
   const body = await response.text();
 
   if (!response.ok) {
@@ -187,23 +212,6 @@ async function callMcpWebsearch(
   }
 
   return parseMcpTextResponse(body) ?? "No search results found.";
-}
-
-async function fetchWithTimeout(url: string | URL, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`websearch timed out after ${timeoutMs / 1_000}s`);
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function formatTextResult(provider: WebsearchProvider, query: string, text: string): string {

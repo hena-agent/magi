@@ -1,4 +1,4 @@
-import { setAuth, type OAuthAuth } from "./auth.js";
+import { type OAuthAuth, setAuth } from "./auth.js";
 import { OPENAI_CODEX_CLIENT_ID, OPENAI_CODEX_ISSUER } from "./openai-codex-oauth-constants.js";
 import type { IdTokenClaims, PkceCodes, TokenResponse } from "./openai-codex-oauth-types.js";
 import { base64UrlEncode } from "./openai-codex-oauth-utils.js";
@@ -45,6 +45,7 @@ export async function exchangeCodeForTokens(
   code: string,
   redirectUri: string,
   pkce: PkceCodes,
+  signal?: AbortSignal,
 ): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -54,14 +55,16 @@ export async function exchangeCodeForTokens(
     code_verifier: pkce.verifier,
   });
 
-  return postTokenRequest(body, "Token exchange failed");
+  return postTokenRequest(body, "Token exchange failed", signal);
 }
 
 export async function refreshOpenAICodexAuth(input: {
   workspaceRoot: string;
   auth: OAuthAuth;
+  signal?: AbortSignal;
 }): Promise<OAuthAuth> {
-  const tokens = await refreshAccessToken(input.auth.refresh);
+  const tokens = await refreshAccessToken(input.auth.refresh, input.signal);
+  input.signal?.throwIfAborted();
   const accountId = extractAccountId(tokens) ?? input.auth.accountId;
   const auth = tokenResponseToAuth(tokens, accountId);
 
@@ -78,24 +81,29 @@ function randomPkceVerifier(): string {
     .join("");
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
+async function refreshAccessToken(
+  refreshToken: string,
+  signal?: AbortSignal,
+): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
     client_id: OPENAI_CODEX_CLIENT_ID,
   });
 
-  return postTokenRequest(body, "Token refresh failed");
+  return postTokenRequest(body, "Token refresh failed", signal);
 }
 
 async function postTokenRequest(
   body: URLSearchParams,
   errorPrefix: string,
+  signal?: AbortSignal,
 ): Promise<TokenResponse> {
   const response = await fetch(`${OPENAI_CODEX_ISSUER}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal,
   });
 
   if (!response.ok) {

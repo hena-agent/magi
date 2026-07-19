@@ -1,5 +1,6 @@
 // biome-ignore lint/style/noExcessiveLinesPerFile: runner flow is kept together until the event loop is split deliberately.
 import type { ModelMessage, ModelStreamEvent, PrimaryModelAdapter } from "../model.js";
+import { isAbortError, rethrowIfAbortError } from "./abort.js";
 import type { AgentAction, ExecutableAgentAction } from "./actions.js";
 import { validateAgentAction } from "./actions.js";
 import { parseJsonObjectFromText } from "./json.js";
@@ -35,6 +36,7 @@ type RunInput = {
   sessionContext?: string;
   executeAction: (action: ExecutableAgentAction) => Promise<string>;
   shouldInterrupt?: () => boolean;
+  signal?: AbortSignal;
   onEvent?: (event: AgentRunEvent) => void;
   maxIterations?: number;
 };
@@ -75,9 +77,10 @@ export async function runEventDrivenAgent(input: RunInput): Promise<AgentRunResu
     if (result) return result;
   }
 
+  const finalResponse = await generateFinalTextOnlyResponse(input, state.observations, state.runId);
   return {
-    status: "max_iterations",
-    finalText: await generateFinalTextOnlyResponse(input, state.observations, state.runId),
+    status: finalResponse.status === "interrupted" ? "interrupted" : "max_iterations",
+    finalText: finalResponse.text,
     steps: state.steps,
   };
 }
@@ -89,7 +92,7 @@ async function runAgentIteration(
   iteration: number,
   maxIterations: number,
 ): Promise<AgentRunResult | undefined> {
-  if (input.shouldInterrupt?.()) {
+  if (input.signal?.aborted || input.shouldInterrupt?.()) {
     return { status: "interrupted", finalText: "Agent run interrupted.", steps: state.steps };
   }
 
@@ -105,20 +108,33 @@ async function runAgentIteration(
     maxIterations,
     false,
   );
+  if (actions === undefined) {
+    return { status: "interrupted", finalText: "Agent run interrupted.", steps: state.steps };
+  }
   const completed = await handleTerminalActions(input, state, stepId, actions);
 
   if (completed) return completed;
 
   const executableActions = actions.map(toExecutableAction);
 
-  const completedAfterActions = await executeNonTerminalActions(
-    input,
-    state,
-    agent,
-    stepId,
-    executableActions,
-    iteration >= maxIterations,
-  );
+  let completedAfterActions: AgentRunResult | undefined;
+  try {
+    completedAfterActions = await executeNonTerminalActions(
+      input,
+      state,
+      agent,
+      stepId,
+      executableActions,
+      iteration >= maxIterations,
+    );
+  } catch (error) {
+    if (!isAbortError(error, input.signal)) throw error;
+    input.onEvent?.({
+      type: "agent_step_ended",
+      payload: { runId: state.runId, stepId, status: "interrupted" },
+    });
+    return { status: "interrupted", finalText: "Agent run interrupted.", steps: state.steps };
+  }
   if (completedAfterActions) return completedAfterActions;
 
   return undefined;
@@ -143,9 +159,9 @@ async function generateActionsOrEmitFailure(
   iteration: number,
   maxIterations: number,
   isLastStep: boolean,
-): Promise<AgentAction[]> {
+): Promise<AgentAction[] | undefined> {
   try {
-    return await generateAgentActions({
+    const actions = await generateAgentActions({
       engine: input.engine,
       agent,
       userMessage: input.userMessage,
@@ -156,16 +172,36 @@ async function generateActionsOrEmitFailure(
       iteration,
       maxIterations,
       isLastStep,
-      onStatus: (text) =>
-        input.onEvent?.({
-          type: "assistant_status",
-          payload: { runId, stepId, kind: "reasoning", text },
-        }),
-      onStream: (event) => {
-        input.onEvent?.(modelStreamEventToRunEvent(event, runId, stepId));
+      onStatus: (text) => {
+        if (!input.signal?.aborted && !input.shouldInterrupt?.())
+          input.onEvent?.({
+            type: "assistant_status",
+            payload: { runId, stepId, kind: "reasoning", text },
+          });
       },
+      onStream: (event) => {
+        if (!input.signal?.aborted && !input.shouldInterrupt?.())
+          input.onEvent?.(modelStreamEventToRunEvent(event, runId, stepId));
+      },
+      signal: input.signal,
     });
+    if (input.signal?.aborted || input.shouldInterrupt?.()) {
+      input.onEvent?.({
+        type: "agent_step_ended",
+        payload: { runId, stepId, status: "interrupted" },
+      });
+      return undefined;
+    }
+    return actions;
   } catch (error) {
+    if (isAbortError(error, input.signal)) {
+      input.onEvent?.({
+        type: "agent_step_ended",
+        payload: { runId, stepId, status: "interrupted" },
+      });
+      return undefined;
+    }
+
     input.onEvent?.({
       type: "provider_error",
       payload: {
@@ -220,9 +256,7 @@ async function executeNonTerminalActions(
   isFinalConfiguredIteration: boolean,
 ): Promise<AgentRunResult | undefined> {
   const results = canExecuteActionsInParallel(actions)
-    ? await Promise.all(
-        actions.map((action) => executeOneNonTerminalAction(input, state, agent, stepId, action)),
-      )
+    ? await executeActionsInParallel(input, state, agent, stepId, actions)
     : await executeActionsSequentially(input, state, agent, stepId, actions);
 
   for (const { action, observation } of results) {
@@ -237,9 +271,19 @@ async function executeNonTerminalActions(
       payload: { runId: state.runId, stepId, status: "completed" },
     });
 
+    const finalResponse = await generateFinalTextOnlyResponse(
+      input,
+      state.observations,
+      state.runId,
+    );
     return {
-      status: isFinalConfiguredIteration ? "max_iterations" : "completed",
-      finalText: await generateFinalTextOnlyResponse(input, state.observations, state.runId),
+      status:
+        finalResponse.status === "interrupted"
+          ? "interrupted"
+          : isFinalConfiguredIteration
+            ? "max_iterations"
+            : "completed",
+      finalText: finalResponse.text,
       steps: state.steps,
     };
   }
@@ -249,6 +293,23 @@ async function executeNonTerminalActions(
     payload: { runId: state.runId, stepId, status: "waiting_for_tools" },
   });
   return undefined;
+}
+
+async function executeActionsInParallel(
+  input: RunInput,
+  state: RunState,
+  agent: AgentInfo,
+  stepId: string,
+  actions: ExecutableAgentAction[],
+): Promise<ActionExecutionResult[]> {
+  const settled = await Promise.allSettled(
+    actions.map((action) => executeOneNonTerminalAction(input, state, agent, stepId, action)),
+  );
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (rejected) throw rejected.reason;
+  return settled.map((result) => (result as PromiseFulfilledResult<ActionExecutionResult>).value);
 }
 
 async function executeActionsSequentially(
@@ -512,6 +573,7 @@ async function generateAgentActions(input: {
   isLastStep: boolean;
   onStatus?: (text: string) => void;
   onStream?: (event: ModelStreamEvent) => void;
+  signal?: AbortSignal;
 }): Promise<AgentAction[]> {
   const nativeActions = await tryGenerateNativeToolActions(input);
   if (nativeActions) return nativeActions;
@@ -524,6 +586,7 @@ async function generateAgentActions(input: {
       input.systemContext,
     ),
     prompt: formatAgentTurnPrompt({ ...input, model: input.engine.provider?.model }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 
   const action = validateAgentAction(parseJsonObjectFromText(response.text));
@@ -547,6 +610,7 @@ async function tryGenerateNativeToolActions(input: {
   isLastStep: boolean;
   onStatus?: (text: string) => void;
   onStream?: (event: ModelStreamEvent) => void;
+  signal?: AbortSignal;
 }): Promise<AgentAction[] | undefined> {
   if (input.isLastStep || !input.engine.generateStep) return undefined;
 
@@ -568,6 +632,7 @@ async function tryGenerateNativeToolActions(input: {
       onStreamEvent(event) {
         input.onStream?.(event);
       },
+      signal: input.signal,
     });
     const content = nativeResponse.content ?? [];
     if (content.length > 0) {
@@ -597,7 +662,8 @@ async function tryGenerateNativeToolActions(input: {
     }
     if (nativeResponse.text.trim().length > 0)
       return [{ type: "answer", content: nativeResponse.text }];
-  } catch (_error) {
+  } catch (error) {
+    rethrowIfAbortError(error, input.signal);
     // Fall back to the JSON action protocol for providers without native tool-call support.
   }
 

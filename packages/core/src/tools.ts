@@ -4,8 +4,8 @@ import { editTool } from "./tools/edit.js";
 import { globTool } from "./tools/glob.js";
 import { grepTool } from "./tools/grep.js";
 import { lspTool } from "./tools/lsp.js";
-import { readTool } from "./tools/read.js";
 import { questionTool } from "./tools/question.js";
+import { readTool } from "./tools/read.js";
 import { createOkResult, truncateToolPreview } from "./tools/result.js";
 import { skillTool } from "./tools/skill.js";
 import { todowriteTool } from "./tools/todowrite.js";
@@ -97,11 +97,11 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
       case "apply_patch":
         return createOkResult(call, applyPatchTool(call.input, runtime));
       case "bash":
-        return createOkResult(call, bashTool(call.input, runtime));
+        return createOkResult(call, await bashTool(call.input, runtime));
       case "webfetch":
-        return createOkResult(call, await webfetchTool(call.input));
+        return createOkResult(call, await webfetchTool(call.input, runtime));
       case "websearch":
-        return createOkResult(call, await websearchTool(call.input));
+        return createOkResult(call, await websearchTool(call.input, runtime));
       case "todowrite":
         return createOkResult(call, todowriteTool(call.input));
       case "question":
@@ -120,6 +120,10 @@ export async function runTool(call: ToolCall, runtime: ToolRuntime): Promise<Too
         throw new Error("plan_exit is executed by the TUI controller, not the core tool runtime.");
     }
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+
     return {
       id: call.id,
       name: call.name,

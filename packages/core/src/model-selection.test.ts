@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEvent } from "./session.js";
 import {
   getDefaultModelSelection,
   getLatestModelSelection,
   getModelProvider,
 } from "./model-selection.js";
+import type { SessionEvent } from "./session.js";
 
 describe("model selection", () => {
   const providers = [

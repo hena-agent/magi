@@ -242,3 +242,41 @@ it("sets store=false for OpenAI Codex OAuth responses requests", async () => {
   expect(body.store).toBe(false);
   expect(body.instructions).toBe("You are concise.");
 });
+
+it("passes abort signals to direct OpenAI Responses requests", async () => {
+  process.env.MAGI_AUTH_CONTENT = JSON.stringify({
+    openai: {
+      type: "oauth",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    },
+  });
+  const controller = new AbortController();
+  let requestSignal: AbortSignal | null | undefined;
+  const fetchMock = vi.fn(
+    async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      requestSignal = init?.signal;
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    },
+  );
+  globalThis.fetch = fetchMock;
+  const adapter = createPrimaryModelAdapter({
+    workspaceRoot: process.cwd(),
+    selectedProviderId: "openai",
+    modelProviders: [],
+  });
+  const request = adapter.generateStep?.({
+    messages: [{ role: "user", content: "hi" }],
+    tools: [],
+    signal: controller.signal,
+  });
+
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  expect(requestSignal).toBe(controller.signal);
+  controller.abort();
+
+  await expect(request).rejects.toMatchObject({ name: "AbortError" });
+});

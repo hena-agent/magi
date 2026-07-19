@@ -17,24 +17,27 @@ import { userAgent } from "./openai-codex-oauth-utils.js";
 export async function loginOpenAICodexHeadless(input: {
   workspaceRoot: string;
   onUserCode?: (input: { url: string; code: string }) => void;
+  signal?: AbortSignal;
 }): Promise<OpenAICodexLoginResult> {
-  const deviceData = await requestDeviceUserCode();
+  const deviceData = await requestDeviceUserCode(input.signal);
   const url = `${OPENAI_CODEX_ISSUER}/codex/device`;
 
   input.onUserCode?.({ url, code: deviceData.user_code });
 
-  const tokens = await pollDeviceAuthorization(deviceData);
+  const tokens = await pollDeviceAuthorization(deviceData, input.signal);
+  input.signal?.throwIfAborted();
   const auth = tokenResponseToAuth(tokens);
   setAuth({ workspaceRoot: input.workspaceRoot, providerId: "openai", auth });
 
   return auth;
 }
 
-async function requestDeviceUserCode(): Promise<DeviceUserCodeResponse> {
+async function requestDeviceUserCode(signal?: AbortSignal): Promise<DeviceUserCodeResponse> {
   const response = await fetch(`${OPENAI_CODEX_ISSUER}/api/accounts/deviceauth/usercode`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify({ client_id: OPENAI_CODEX_CLIENT_ID }),
+    signal,
   });
 
   if (!response.ok) {
@@ -44,25 +47,31 @@ async function requestDeviceUserCode(): Promise<DeviceUserCodeResponse> {
   return (await response.json()) as DeviceUserCodeResponse;
 }
 
-async function pollDeviceAuthorization(deviceData: DeviceUserCodeResponse): Promise<TokenResponse> {
+async function pollDeviceAuthorization(
+  deviceData: DeviceUserCodeResponse,
+  signal?: AbortSignal,
+): Promise<TokenResponse> {
   const interval = Math.max(Number.parseInt(deviceData.interval, 10) || 5, 1) * 1_000;
 
   while (true) {
-    const response = await requestDeviceToken(deviceData);
+    const response = await requestDeviceToken(deviceData, signal);
 
     if (response.ok) {
-      return exchangeDeviceTokenResponse(response);
+      return exchangeDeviceTokenResponse(response, signal);
     }
 
     if (response.status !== 403 && response.status !== 404) {
       throw new Error(`Device authorization failed: ${response.status}`);
     }
 
-    await sleep(interval + oauthPollingSafetyMarginMs);
+    await sleep(interval + oauthPollingSafetyMarginMs, undefined, { signal });
   }
 }
 
-function requestDeviceToken(deviceData: DeviceUserCodeResponse): Promise<Response> {
+function requestDeviceToken(
+  deviceData: DeviceUserCodeResponse,
+  signal?: AbortSignal,
+): Promise<Response> {
   return fetch(`${OPENAI_CODEX_ISSUER}/api/accounts/deviceauth/token`, {
     method: "POST",
     headers: jsonHeaders(),
@@ -70,10 +79,14 @@ function requestDeviceToken(deviceData: DeviceUserCodeResponse): Promise<Respons
       device_auth_id: deviceData.device_auth_id,
       user_code: deviceData.user_code,
     }),
+    signal,
   });
 }
 
-async function exchangeDeviceTokenResponse(response: Response): Promise<TokenResponse> {
+async function exchangeDeviceTokenResponse(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<TokenResponse> {
   const data = (await response.json()) as DeviceTokenResponse;
 
   return exchangeCodeForTokens(
@@ -83,6 +96,7 @@ async function exchangeDeviceTokenResponse(response: Response): Promise<TokenRes
       verifier: data.code_verifier,
       challenge: "",
     },
+    signal,
   );
 }
 

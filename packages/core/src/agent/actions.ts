@@ -1,8 +1,8 @@
 import type { ToolName } from "../tools.js";
 import {
   isLspPositionActionType,
-  readLspPositionAction,
   type LspPositionAgentAction,
+  readLspPositionAction,
 } from "./actions-lsp.js";
 import { readWebsearchAction, type WebsearchAgentAction } from "./actions-websearch.js";
 

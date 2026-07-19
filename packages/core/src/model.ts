@@ -2,6 +2,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { generateText, type LanguageModel, streamText } from "ai";
+import { isAbortError } from "./agent/abort.js";
 import { listEffectiveModelProviders, type ModelProviderSettings } from "./model-catalog.js";
 import {
   getProviderBaseUrl,
@@ -10,6 +11,7 @@ import {
 } from "./model-runtime.js";
 import { formatToolCalls, formatToolDefinitions } from "./model-tools.js";
 import { createOpenAICodexOAuthFetch } from "./openai-codex-oauth.js";
+import { isRawModelLoggingEnabled } from "./openai-codex-oauth-fetch.js";
 import type { ToolName } from "./tools.js";
 
 type ModelAdapterConfig = {
@@ -30,13 +32,18 @@ type AdapterRuntime = {
 
 export type PrimaryModelAdapter = {
   provider?: SelectedModelProvider;
-  generateText(input: { system?: string; prompt: string }): Promise<{ text: string }>;
+  generateText(input: {
+    system?: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<{ text: string }>;
   generateStep?(input: {
     system?: string;
     messages: ModelMessage[];
     tools: ModelToolDefinition[];
     toolChoice?: "auto" | "none";
     onStreamEvent?: (event: ModelStreamEvent) => void;
+    signal?: AbortSignal;
   }): Promise<ModelStepResponse>;
 };
 
@@ -218,7 +225,7 @@ function selectedProviderFromConfig(providerConfig: ModelProviderSettings): Sele
 
 async function generateAdapterText(
   runtime: AdapterRuntime,
-  input: { system?: string; prompt: string },
+  input: { system?: string; prompt: string; signal?: AbortSignal },
 ): Promise<{ text: string }> {
   try {
     if (runtime.isOAuth) {
@@ -232,6 +239,7 @@ async function generateAdapterText(
           },
         },
         prompt: input.prompt,
+        ...(input.signal === undefined ? {} : { abortSignal: input.signal }),
       });
 
       return { text: await result.text };
@@ -241,10 +249,12 @@ async function generateAdapterText(
       model: await runtime.getModel(),
       system: input.system ?? defaultSystemPrompt,
       prompt: input.prompt,
+      ...(input.signal === undefined ? {} : { abortSignal: input.signal }),
     });
 
     return { text: result.text };
   } catch (error) {
+    if (isAbortError(error, input.signal)) throw error;
     throwModelCallError(runtime, error);
   }
 }
@@ -258,6 +268,7 @@ async function generateAdapterStep(
       ? await generateOAuthStep(runtime, input)
       : await generateChatStep(runtime, input);
   } catch (error) {
+    if (isAbortError(error, input.signal)) throw error;
     throw new Error(
       `Native tool-call model step failed for provider ${runtime.providerConfig.id}: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -285,6 +296,7 @@ async function generateOAuthStep(
       tool_choice: input.toolChoice ?? "auto",
       stream: true,
     }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 
   if (!response.ok) {
@@ -897,6 +909,7 @@ async function generateChatStep(
     prompt: formatModelMessages(input.messages),
     tools: formatToolDefinitions(input.tools),
     toolChoice: input.toolChoice ?? "auto",
+    ...(input.signal === undefined ? {} : { abortSignal: input.signal }),
   });
   await appendRawModelLog(runtime, "chat-step-result", {
     text: result.text,
@@ -932,6 +945,8 @@ async function appendRawModelLog(
   phase: string,
   payload: unknown,
 ): Promise<void> {
+  if (!isRawModelLoggingEnabled()) return;
+
   const directory = join(runtime.workspaceRoot ?? process.cwd(), ".magi", "debug");
   await mkdir(directory, { recursive: true });
   await appendFile(
