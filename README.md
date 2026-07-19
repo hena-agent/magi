@@ -113,25 +113,11 @@ For source execution during debugging, use:
 pnpm --filter @magi/tui start:tsx
 ```
 
-MAGI currently uses Ink as the primary production TUI renderer. The current UX upgrade plan is documented in `docs/ink-experience-upgrade.md`.
+Raw model protocol logging is disabled by default because request and response bodies can contain
+sensitive prompts, reasoning metadata, and tool output. For local protocol diagnostics only, opt in
+explicitly with `MAGI_RAW_MODEL_LOGGING=1`; records are written to `.magi/debug/model-raw.ndjson`.
 
-An experimental OpenTUI reference path is available, but native OpenTUI rendering is blocked by OpenTUI core Node FFI support in this environment:
-
-```sh
-pnpm --filter @magi/tui start:opentui
-```
-
-To print the current OpenTUI reference status without entering native rendering:
-
-```sh
-pnpm --filter @magi/tui start:opentui:info
-```
-
-To retry the native OpenTUI experiment and receive a graceful diagnostic if native FFI is unavailable:
-
-```sh
-MAGI_OPENTUI_SMOKE=1 pnpm --filter @magi/tui start:opentui:native
-```
+MAGI uses Ink as its production TUI renderer. Interactive terminals start in a responsive alternate-screen daily-driver UI with a sticky composer; non-interactive stdout falls back to inline rendering. The current UX plan and implementation status are documented in `docs/ink-experience-upgrade.md`.
 
 ## Development
 

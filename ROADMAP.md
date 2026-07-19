@@ -71,6 +71,8 @@
 - [x] Add context compaction with summary events, recent-context retention, tool-output truncation, and overflow recovery.
 - [x] Add background session maintenance for generated titles, summaries, and cleanup of legacy empty sessions.
 - [x] Add queued and steering input handling while an agent run is active.
+- [x] Propagate cancellation through model, tool, verification, OAuth, catalog, and background task operations with graceful process shutdown.
+- [x] Reconcile resumed assistant streams, final responses, tool settlements, active agents, and removed model providers without corrupting transcript state.
 - [x] Add OpenCode-style tool parity in the real agent loop, not only as slash commands.
   - [x] Add core/native/JSON/TUI loop support for `webfetch`, `todowrite`, and `question`.
   - [x] Upgrade `question` from output-only prompts to interactive TUI question answering with tool-result continuation.
@@ -91,6 +93,8 @@
   - [x] Add focused tests for max-step final text-only response behavior.
   - [x] Add focused tests for resumed context including todos, task updates, and plan exits.
   - [x] Add TUI-level coverage for draft session persistence.
+  - [x] Add deterministic controller coverage for permission-gated tools, queued input, persistence, and startup resume.
+  - [x] Add cancellation coverage for in-flight and non-cooperative models, process trees, shutdown ordering, and interrupted replay.
 
 ## Phase 4: Multi-Engine Support
 - [x] Implement model adapter interface.
@@ -113,7 +117,7 @@
 - [x] Improve question prompts with option selection, custom answers, and multi-select handling.
 - [x] Render tool activity as concise cards with status, changed paths, command summaries, and collapsed long output.
 - [x] Add visible running state for thinking, active tool, queued prompts, permissions, and background tasks.
-- [x] Defer full OpenTUI migration, mouse support, rich diff viewer, and timeline branching until the Ink TUI is usable.
+- [x] Establish Ink as the production TUI renderer and defer mouse support, rich diff viewing, and timeline branching until the daily-driver loop is stable.
 
 ## Phase 5: Assistant Integration
 - [ ] Add MAGI trigger policy for risky work.

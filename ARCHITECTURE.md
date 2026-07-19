@@ -7,7 +7,7 @@
 
 ## Bootstrap Architecture
 - Start with a direct terminal process, not a daemon/server architecture.
-- Use the current Ink TUI as the bootstrap daily-driver shell; defer full OpenTUI migration, mouse support, rich diff viewing, and timeline branching until the session runner and safety boundaries are clearer.
+- Use the Ink TUI as the bootstrap daily-driver shell; defer mouse support, rich diff viewing, and timeline branching until the session runner and safety boundaries are clearer.
 - Use SQLite-backed append-only session events for persisted sessions, with draft sessions held in memory until the first successful assistant response.
 - Implement a typed tool registry with `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`, `webfetch`, `websearch`, `todowrite`, `question`, `skill`, TypeScript/JavaScript LSP tools, `task`, and `plan_exit`.
 - Use one primary model adapter for the normal loop; MAGI multi-engine foundations use configurable provider pools and remain gated behind explicit high-assurance workflows.

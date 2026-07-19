@@ -2,9 +2,9 @@
 
 ## Status
 
-This is the active TUI plan.
+This is the active TUI plan. The Ink daily-driver milestone is implemented: interactive terminals use fullscreen by default, while non-interactive output falls back to inline rendering.
 
-MAGI will keep Ink as the primary renderer and build an OpenCode/OpenTUI-style experience on top of the existing Node + React + Ink stack. The previous OpenTUI native migration is blocked by OpenTUI's Node FFI runtime support and is now reference material only.
+MAGI uses Ink as its sole production TUI renderer and builds the coding-agent experience on the existing Node + React + Ink stack.
 
 ## Decision
 
@@ -16,9 +16,6 @@ Reasons:
 - Ink is React-based and fits the current component/controller structure.
 - Ink works with the existing `better-sqlite3` session store.
 - Agentic CLIs such as Claude Code and Gemini CLI use Ink-style React terminal rendering successfully.
-- OpenTUI native rendering cannot currently initialize under Node in this environment because OpenTUI core cannot open its native FFI backend.
-
-OpenTUI remains useful as a design and API reference, but not as the active renderer target until its Node runtime path works without Bun or unsupported Node FFI flags.
 
 ## Goals
 
@@ -31,17 +28,15 @@ OpenTUI remains useful as a design and API reference, but not as the active rend
   - attached slash suggestions
   - consistent overlays
   - stable paste and cursor behavior
-- Continue extracting renderer-neutral state and action helpers so future renderer experiments remain possible.
-- Avoid a big-bang rewrite.
+- Keep renderer-neutral state and action helpers where they reduce product risk.
+- Prioritize visible daily-driver behavior over further controller extraction.
 
 ## Non-Goals
 
-- Do not remove OpenTUI prototype files yet.
 - Do not make Bun a project runtime.
 - Do not switch to terminal-kit or another imperative renderer without a separate spike and decision.
-- Do not block Ink UX improvements on OpenTUI native support.
 
-## Current Assets To Reuse
+## Renderer-Neutral Assets
 
 Renderer-neutral helpers already extracted:
 
@@ -53,23 +48,11 @@ Renderer-neutral helpers already extracted:
 - `apps/tui/src/transcript-parts.ts`
 - `apps/tui/src/tui-session-state.ts`
 
-OpenTUI prototype files to keep as reference:
-
-- `apps/tui/src/opentui-composer.tsx`
-- `apps/tui/src/opentui-command-suggestions.tsx`
-- `apps/tui/src/opentui-transcript.tsx`
-- `apps/tui/src/opentui-index.tsx`
-- `apps/tui/src/opentui-info.ts`
-- `apps/tui/src/opentui-node-loader.ts`
-- `apps/tui/src/opentui-session-boot.ts`
-
-These files should not drive product architecture. Use them only for implementation ideas such as compact layout, cursor rendering, suggestion behavior, and transcript line reuse.
-
 ## Target Ink Experience
 
 ### Default Mode
 
-Keep the current main-screen behavior stable until fullscreen is proven.
+Interactive TTY sessions use the alternate-screen fullscreen Ink UI by default. Non-interactive stdin/stdout uses inline rendering without terminal control sequences.
 
 The default command remains:
 
@@ -77,17 +60,7 @@ The default command remains:
 pnpm --filter @magi/tui start
 ```
 
-### Fullscreen Mode
-
-Add fullscreen as an opt-in mode first.
-
-Candidate activation:
-
-```sh
-MAGI_TUI_FULLSCREEN=1 pnpm --filter @magi/tui start
-```
-
-Fullscreen mode should use alternate screen, hide the terminal cursor while the app owns rendering, restore terminal state on exit, and gracefully fall back if stdin/stdout is not interactive.
+Fullscreen mode uses alternate screen, hides the native terminal cursor while the app owns rendering, restores terminal state on exit, and gracefully falls back when stdin/stdout is not interactive. Ctrl+C first cancels active foreground work and discards queued prompts; a second Ctrl+C forces exit. SIGINT and SIGTERM cancel foreground and background operations, wait up to five seconds for settlement and persistence, then force process termination if a provider does not cooperate.
 
 ### Responsive Layout
 
@@ -96,12 +69,13 @@ The layout should adapt to terminal size.
 Wide terminals:
 
 ```txt
-┌ status: agent/model/mode/session/risk/todos ┐
-│ transcript viewport                          │
-│ selected/expanded tool and reasoning details  │
-├ attached slash suggestions / overlays         │
-│ > composer with visible cursor                │
-└ footer: shortcuts/status/queue                ┘
+MAGI  agent · model · session · status
+workspace · risk · todos · queue
+transcript viewport
+selected/expanded tool and reasoning details
+attached slash suggestions or overlay
+╭ composer with visible cursor ╮
+contextual footer
 ```
 
 Narrow terminals:
@@ -118,44 +92,48 @@ footer
 
 ### Phase 1: Document And Freeze Direction
 
-Status: active.
+Status: complete.
 
 Tasks:
 
 - Add this document.
-- Mark OpenTUI migration docs as blocked/reference.
-- Update README to make Ink primary and OpenTUI experimental.
+- Remove superseded renderer experiments and keep Ink as the only supported TUI path.
+- Update README to make Ink renderer behavior explicit.
 
 Done when:
 
 - Future work points here for TUI UX direction.
-- OpenTUI docs no longer imply active renderer replacement.
+- No alternate renderer path is shipped or documented.
 
 ### Phase 2: Ink Fullscreen Shell
 
-Goal: provide an opt-in full-height shell without changing default behavior.
+Status: complete and promoted to the default interactive mode.
+
+Goal: provide a full-height shell with safe terminal ownership.
 
 Tasks:
 
-- Add fullscreen config/env gate.
+- Detect interactive TTY capability.
 - Add alternate screen enter/exit helper for Ink runtime.
 - Track terminal size and resize events.
 - Pass layout mode and terminal dimensions into `AppView`.
-- Keep default main-screen layout unchanged.
+- Keep non-interactive inline fallback.
 
 Acceptance checks:
 
-- Default `pnpm --filter @magi/tui start` behaves as before.
-- `MAGI_TUI_FULLSCREEN=1 pnpm --filter @magi/tui start` restores terminal state on exit.
+- Default `pnpm --filter @magi/tui start` enters fullscreen in an interactive terminal.
+- Fullscreen restores terminal state on exit.
 - Non-interactive execution does not attempt alternate screen control.
 
 ### Phase 3: Transcript Viewport
+
+Status: complete.
 
 Goal: make transcript rendering feel like a stable viewport instead of a growing block.
 
 Tasks:
 
-- Use terminal height to compute transcript line limit in fullscreen mode.
+- Use Ink flex layout and `measureElement()` to compute the actual transcript line limit.
 - Reuse `getTranscriptVisibleLineWindow()` for all visible line slicing.
 - Keep selection visible while navigating with `j`/`k`.
 - Preserve expanded reasoning/tool details.
@@ -169,11 +147,13 @@ Acceptance checks:
 
 ### Phase 4: Composer And Suggestions
 
+Status: complete.
+
 Goal: make prompt entry feel compact and predictable.
 
 Tasks:
 
-- Port the useful OpenTUI prototype behavior back to Ink:
+- Implement the required coding-agent input behavior in Ink:
   - visible block cursor
   - multiline paste preservation
   - exact slash command hides suggestions
@@ -187,8 +167,11 @@ Acceptance checks:
 - Pasted newlines survive.
 - `cmd+v`/bracketed paste behavior is stable where supported by Ink.
 - Slash suggestion behavior matches tests.
+- Multiline composer content is windowed around the cursor and capped by terminal density.
 
 ### Phase 5: Overlay Consolidation
+
+Status: complete.
 
 Goal: make permission, question, selector, model, agent, and session overlays visually consistent.
 
@@ -209,6 +192,8 @@ Acceptance checks:
 
 Goal: reduce risk in `app-controller.tsx` while keeping Ink as the active renderer.
 
+Status: sufficient for the daily-driver milestone. Session event transcript conversion, transcript navigation, and overlay input handlers are extracted. Command dispatch remains in `app-controller.tsx` and is deliberately deferred until a product need justifies it.
+
 Tasks:
 
 - Extract `sessionEventsToTranscriptMessages()` into a renderer-neutral module.
@@ -216,26 +201,33 @@ Tasks:
 - Extract transcript navigation actions.
 - Extract permission/question/selector input handlers.
 
+Implemented modules:
+
+- `apps/tui/src/session-event-transcript.ts`
+- `apps/tui/src/session-event-format.ts`
+- `apps/tui/src/transcript-navigation.ts`
+- `apps/tui/src/overlay-input.ts`
+- `apps/tui/src/transcript-types.ts`
+
 Acceptance checks:
 
 - Existing tests pass.
 - New focused tests cover extracted behavior.
 - App behavior remains unchanged in default mode.
 
-## OpenTUI Policy
+### Phase 7: Daily-Driver Visual Shell
 
-OpenTUI files stay in the repo for reference and future reevaluation.
+Status: complete.
 
-Current commands:
+Implemented behavior:
 
-```sh
-pnpm --filter @magi/tui start:opentui
-pnpm --filter @magi/tui start:opentui:native
-```
-
-`start:opentui` prints migration status. `start:opentui:native` attempts native rendering but exits gracefully with a diagnostic if OpenTUI core native FFI is unavailable.
-
-Do not add new product features only to the OpenTUI path until native rendering works under Node.
+- Borderless transcript with semantic tool/reasoning status colors.
+- Two-line responsive MAGI run rail.
+- Compact centered repository landing state.
+- Sticky prompt dock with attached suggestions and overlays.
+- Wide, narrow, and short-terminal density policies.
+- Render-to-string regression coverage for landing, conversation, suggestions, and permission states.
+- PTY smoke coverage for 80x24 and 60x20 layouts, slash suggestions, multiline bracketed paste, and terminal restoration.
 
 ## Alternative Renderer Policy
 
@@ -252,7 +244,7 @@ Before adopting any alternative renderer, require a short spike proving:
 
 ## Immediate Next Steps
 
-1. Implement opt-in Ink fullscreen shell.
-2. Make transcript viewport height responsive in fullscreen mode.
-3. Improve Ink composer and slash suggestions using behavior already proven in shared helpers.
-4. Continue controller extraction, starting with session event transcript conversion.
+1. Use the fullscreen Ink UI as the normal development path and collect concrete friction reports.
+2. Add focused regression cases when real permission/question/session workflows expose layout issues.
+3. Defer command-dispatch extraction until command behavior needs modification.
+4. Consider alternative renderer research only if Ink fails a concrete product requirement.

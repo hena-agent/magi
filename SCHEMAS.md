@@ -136,7 +136,7 @@ type ToolSettlement = {
 ```ts
 type TaskUpdate = {
   taskId: string
-  status: "started" | "completed" | "failed"
+  status: "started" | "completed" | "failed" | "interrupted"
   description: string
   subagentId: string
   parentAgentId: string
