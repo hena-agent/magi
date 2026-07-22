@@ -194,17 +194,22 @@ type LiveToolActivity = {
 
 export function AppController(props: {
   fullscreen?: boolean;
+  targetDirectory?: string;
   dependencies?: Partial<AppControllerDependencies>;
   lifecycle?: AppLifecycle;
 }) {
   const { exit } = useApp();
   const { isRawModeSupported } = useStdin();
   const dependencies = { ...defaultAppControllerDependencies, ...props.dependencies };
-  const config = dependencies.loadConfig();
+  const config = dependencies.loadConfig(
+    props.targetDirectory === undefined ? undefined : { cwd: props.targetDirectory },
+  );
   const task = createTask("Bootstrap MAGI TUI");
   const canReadInput = isRawModeSupported;
   const [store] = useState(() =>
-    dependencies.createSessionStore({ workspaceRoot: config.workspaceRoot }),
+    dependencies.createSessionStore({
+      workspaceRoot: config.workspaceRoot,
+    }),
   );
   const [initialSession] = useState<InitialSessionState>(() => createInitialSession(store, config));
   const [sessionJournal] = useState(() =>
