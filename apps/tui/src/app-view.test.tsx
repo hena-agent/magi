@@ -59,6 +59,7 @@ describe("fullscreen AppView landing", () => {
     const output = renderView();
 
     expect(output).toContain("MAGI  build · openai/gpt-5 · abcdefgh");
+    expect(output).toContain(" __  __    _    ____ ___");
     expect(output).toContain("Ask for a change, bug fix, or review.");
     expect(output).toContain("Ask for a change...");
     expect(output.indexOf("Ask for a change, bug fix, or review.")).toBeLessThan(
@@ -71,8 +72,11 @@ describe("fullscreen AppView landing", () => {
     const output = renderView({ terminalSize: { width: 60, height: 20 } });
 
     expect(output).toContain("MAGI · READY · build");
+    expect(output).toContain("[ MAGI ]");
+    expect(output).not.toContain(" __  __    _    ____ ___");
     expect(output).not.toContain("/Users/alma/Development/magi");
     expect(output).toContain("Ask for a change, bug fix, or review.");
+    expect(output).not.toContain("MAGI CODING ASSISTANT");
     expect(Math.max(...output.split("\n").map((line) => line.length))).toBeLessThanOrEqual(60);
   });
 

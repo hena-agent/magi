@@ -223,7 +223,8 @@ Implemented behavior:
 
 - Borderless transcript with semantic tool/reasoning status colors.
 - Two-line responsive MAGI run rail.
-- Compact centered repository landing state.
+- Centered repository landing state with responsive MAGI artwork: a full ASCII wordmark on wide
+  terminals and a compact one-line mark on narrow terminals.
 - Sticky prompt dock with attached suggestions and overlays.
 - Wide, narrow, and short-terminal density policies.
 - Render-to-string regression coverage for landing, conversation, suggestions, and permission states.

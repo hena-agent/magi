@@ -21,7 +21,13 @@ export type EffectiveModelProvider = ModelProviderSettings & {
 
 export const builtinModelProviders: ModelProviderSettings[] = [
   {
-    id: "openai",
+    id: "openai-gpt-5.6-sol",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    auth: { type: "oauth" },
+  },
+  {
+    id: "openai-gpt-5-5",
     provider: "openai",
     model: "gpt-5.5",
     auth: { type: "oauth" },

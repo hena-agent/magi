@@ -233,6 +233,7 @@ function StartDashboard(props: {
 }) {
   return (
     <Box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
+      <MagiLogo compact={props.compact} />
       <Text bold>{workspaceName(props.workspaceRoot)}</Text>
       {!props.compact ? <Text dimColor>{props.workspaceRoot}</Text> : null}
       <Text dimColor>{`${props.activeAgentId} · ${props.activeModelId}`}</Text>
@@ -242,6 +243,28 @@ function StartDashboard(props: {
       {!props.compact ? (
         <Text dimColor>/sessions resume · /model switch · /agent switch</Text>
       ) : null}
+    </Box>
+  );
+}
+
+const MAGI_LOGO = [
+  " __  __    _    ____ ___",
+  "|  \\/  |  / \\  / ___|_ _|",
+  "| |\\/| | / _ \\| |  _ | |",
+  "| |  | |/ ___ \\ |_| || |",
+  "|_|  |_/_/   \\_\\____|___|",
+];
+
+function MagiLogo(props: { compact: boolean }) {
+  if (props.compact) return <Text color="cyan" bold>[ MAGI ]</Text>;
+
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      {MAGI_LOGO.map((line) => (
+        <Text key={line} color="cyan" bold>
+          {line}
+        </Text>
+      ))}
     </Box>
   );
 }
