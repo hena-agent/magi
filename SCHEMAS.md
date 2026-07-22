@@ -7,6 +7,7 @@
 
 ## Bootstrap Required Schemas
 - `Task`
+- `Session`
 - `SessionEvent`
 - `ToolCall`
 - `ToolResult`
@@ -42,6 +43,21 @@ type Task = {
   updatedAt: string
 }
 ```
+
+## Session
+```ts
+type Session = {
+  id: string
+  workspaceRoot: string
+  project?: string
+  directory?: string
+  title?: string
+  createdAt: string
+  updatedAt: string
+}
+```
+
+`project` and `directory` are optional so the session model can later represent codeless sessions. During the workspace-local bootstrap, coding sessions use the workspace root path as `project` and preserve the exact CLI target as `directory`; `workspaceRoot` remains the required storage and permission boundary.
 
 ## Session Event
 ```ts

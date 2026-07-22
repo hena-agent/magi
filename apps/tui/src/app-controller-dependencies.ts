@@ -1,4 +1,4 @@
-import { loadConfig, type MagiConfig } from "@magi/config";
+import { type LoadConfigOptions, loadConfig, type MagiConfig } from "@magi/config";
 import {
   createPrimaryModelAdapter,
   createSessionStore,
@@ -10,8 +10,12 @@ import {
 } from "@magi/core";
 
 export type AppControllerDependencies = {
-  loadConfig: () => MagiConfig;
-  createSessionStore: (input: { workspaceRoot: string }) => SessionStore;
+  loadConfig: (options?: LoadConfigOptions) => MagiConfig;
+  createSessionStore: (input: {
+    workspaceRoot: string;
+    project?: string;
+    directory?: string;
+  }) => SessionStore;
   createPrimaryModelAdapter: (
     input: Parameters<typeof createPrimaryModelAdapter>[0],
   ) => PrimaryModelAdapter;

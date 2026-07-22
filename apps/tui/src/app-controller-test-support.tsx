@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import type { MagiConfig } from "@magi/config";
+import type { LoadConfigOptions, MagiConfig } from "@magi/config";
 import type { PrimaryModelAdapter, SessionStore, ToolCall, ToolResult } from "@magi/core";
 import { render } from "ink";
 import { AppController } from "./app-controller.js";
@@ -19,13 +19,22 @@ export function mountController(input: {
   runTool: AppControllerDependencies["runTool"];
   adapterSessionIds?: string[];
   lifecycle?: AppLifecycle;
+  targetDirectory?: string;
+  loadConfigOptions?: Array<LoadConfigOptions | undefined>;
+  createSessionStoreOptions?: Array<Parameters<AppControllerDependencies["createSessionStore"]>[0]>;
 }) {
   const streams = createTestStreams();
   const app = render(
     <AppController
       dependencies={{
-        loadConfig: () => input.config,
-        createSessionStore: () => input.store,
+        loadConfig: (options) => {
+          input.loadConfigOptions?.push(options);
+          return input.config;
+        },
+        createSessionStore: (options) => {
+          input.createSessionStoreOptions?.push(options);
+          return input.store;
+        },
         createPrimaryModelAdapter: (adapterInput) => {
           input.adapterSessionIds?.push(adapterInput.sessionId ?? "");
           return input.adapter;
@@ -33,6 +42,7 @@ export function mountController(input: {
         runTool: input.runTool,
       }}
       lifecycle={input.lifecycle}
+      {...(input.targetDirectory === undefined ? {} : { targetDirectory: input.targetDirectory })}
     />,
     {
       stdin: streams.stdin,

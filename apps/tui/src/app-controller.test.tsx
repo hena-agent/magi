@@ -20,6 +20,36 @@ import {
 } from "./app-controller-test-support.js";
 import { createAppLifecycle } from "./app-lifecycle.js";
 
+it("loads configuration for the selected target directory", () => {
+  const targetDirectory = mkdtempSync(join(tmpdir(), "magi-controller-target-"));
+  const workspaceRoot = join(targetDirectory, "workspace");
+  const store = createSessionStore({ workspaceRoot: targetDirectory });
+  const loadConfigOptions: Array<{ cwd?: string } | undefined> = [];
+  const createSessionStoreOptions: Array<{
+    workspaceRoot: string;
+    project?: string;
+    directory?: string;
+  }> = [];
+  const mount = mountController({
+    config: testConfig(workspaceRoot, "new"),
+    store,
+    adapter: textAdapter("unused"),
+    runTool: async (call) => successfulTool(call, []),
+    targetDirectory,
+    loadConfigOptions,
+    createSessionStoreOptions,
+  });
+
+  try {
+    expect(loadConfigOptions).toEqual([{ cwd: targetDirectory }]);
+    expect(createSessionStoreOptions).toEqual([
+      { workspaceRoot, project: workspaceRoot, directory: targetDirectory },
+    ]);
+  } finally {
+    mount.app.unmount();
+  }
+});
+
 it("persists a tool turn and queued turn in one resumable session", async () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-controller-lifecycle-"));
   const firstStep = deferred<void>();

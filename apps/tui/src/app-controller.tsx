@@ -209,6 +209,8 @@ export function AppController(props: {
   const [store] = useState(() =>
     dependencies.createSessionStore({
       workspaceRoot: config.workspaceRoot,
+      project: config.workspaceRoot,
+      ...(props.targetDirectory === undefined ? {} : { directory: props.targetDirectory }),
     }),
   );
   const [initialSession] = useState<InitialSessionState>(() => createInitialSession(store, config));

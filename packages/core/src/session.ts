@@ -6,10 +6,20 @@ import { asc, desc, eq, max } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { sessionEvents, sessions } from "./db/schema.js";
+import {
+  createSessionEventRecord,
+  createSessionRecord,
+  eventFromRow,
+  eventToRow,
+  sessionFromRow,
+  sessionToRow,
+} from "./session-record.js";
 
 export type Session = {
   id: string;
   workspaceRoot: string;
+  project?: string;
+  directory?: string;
   title?: string;
   createdAt: string;
   updatedAt: string;
@@ -53,6 +63,8 @@ export type SessionEvent = {
 
 type CreateSessionStoreOptions = {
   workspaceRoot: string;
+  project?: string;
+  directory?: string;
   databasePath?: string;
   migrationsFolder?: string;
 };
@@ -85,6 +97,8 @@ export function createSessionStore(options: CreateSessionStoreOptions): SessionS
     db,
     sqlite,
     workspaceRoot: options.workspaceRoot,
+    project: options.project,
+    directory: options.directory,
     nextTimestamp,
   });
 
@@ -102,23 +116,35 @@ class SqliteSessionStore implements SessionStore {
   readonly #db: SessionDatabase;
   readonly #sqlite: Database.Database;
   readonly #workspaceRoot: string;
+  readonly #project: string | undefined;
+  readonly #directory: string | undefined;
   readonly #nextTimestamp: () => string;
 
   constructor(input: {
     db: SessionDatabase;
     sqlite: Database.Database;
     workspaceRoot: string;
+    project: string | undefined;
+    directory: string | undefined;
     nextTimestamp: () => string;
   }) {
     this.#db = input.db;
     this.#sqlite = input.sqlite;
     this.#workspaceRoot = input.workspaceRoot;
+    this.#project = input.project;
+    this.#directory = input.directory;
     this.#nextTimestamp = input.nextTimestamp;
   }
 
   createSession(input: { title?: string } = {}): Session {
     const timestamp = this.#nextTimestamp();
-    const session = createSessionRecord(this.#workspaceRoot, timestamp, input.title);
+    const session = createSessionRecord({
+      workspaceRoot: this.#workspaceRoot,
+      project: this.#project,
+      directory: this.#directory,
+      timestamp,
+      title: input.title,
+    });
 
     this.#db.insert(sessions).values(sessionToRow(session)).run();
 
@@ -215,71 +241,4 @@ class SqliteSessionStore implements SessionStore {
 
     return (row?.sequence ?? 0) + 1;
   }
-}
-
-function createSessionRecord(workspaceRoot: string, timestamp: string, title?: string): Session {
-  return {
-    id: crypto.randomUUID(),
-    workspaceRoot,
-    ...(title === undefined ? {} : { title }),
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
-}
-
-function sessionToRow(session: Session): typeof sessions.$inferInsert {
-  return {
-    id: session.id,
-    workspaceRoot: session.workspaceRoot,
-    title: session.title ?? null,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-  };
-}
-
-function createSessionEventRecord(
-  input: { sessionId: string; type: SessionEventType; payload: unknown },
-  sequence: number,
-  timestamp: string,
-): SessionEvent {
-  return {
-    id: crypto.randomUUID(),
-    sessionId: input.sessionId,
-    sequence,
-    type: input.type,
-    payload: input.payload,
-    createdAt: timestamp,
-  };
-}
-
-function eventToRow(event: SessionEvent): typeof sessionEvents.$inferInsert {
-  return {
-    id: event.id,
-    sessionId: event.sessionId,
-    sequence: event.sequence,
-    type: event.type,
-    payloadJson: JSON.stringify(event.payload),
-    createdAt: event.createdAt,
-  };
-}
-
-function eventFromRow(event: typeof sessionEvents.$inferSelect): SessionEvent {
-  return {
-    id: event.id,
-    sessionId: event.sessionId,
-    sequence: event.sequence,
-    type: event.type as SessionEventType,
-    payload: JSON.parse(event.payloadJson) as unknown,
-    createdAt: event.createdAt,
-  };
-}
-
-function sessionFromRow(row: typeof sessions.$inferSelect): Session {
-  return {
-    id: row.id,
-    workspaceRoot: row.workspaceRoot,
-    ...(row.title === null ? {} : { title: row.title }),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
 }

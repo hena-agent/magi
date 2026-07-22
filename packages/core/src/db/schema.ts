@@ -3,6 +3,8 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   workspaceRoot: text("workspace_root").notNull(),
+  project: text("project"),
+  directory: text("directory"),
   title: text("title"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

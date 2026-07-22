@@ -6,15 +6,38 @@ import { createSessionStore } from "./session.js";
 
 it("creates a SQLite database and stores sessions", () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-session-test-"));
+  const directory = join(workspaceRoot, "packages", "app");
   const databasePath = join(workspaceRoot, ".magi", "magi.db");
-  const store = createSessionStore({ workspaceRoot, databasePath });
+  const store = createSessionStore({
+    workspaceRoot,
+    project: workspaceRoot,
+    directory,
+    databasePath,
+  });
 
   try {
     const session = store.createSession({ title: "test session" });
 
     expect(existsSync(databasePath)).toBe(true);
     expect(session.workspaceRoot).toBe(workspaceRoot);
+    expect(session.project).toBe(workspaceRoot);
+    expect(session.directory).toBe(directory);
     expect(session.title).toBe("test session");
+  } finally {
+    store.close();
+  }
+});
+
+it("keeps project and directory optional", () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-session-test-"));
+  const store = createSessionStore({ workspaceRoot });
+
+  try {
+    const session = store.createSession();
+
+    expect(session.workspaceRoot).toBe(workspaceRoot);
+    expect(session.project).toBeUndefined();
+    expect(session.directory).toBeUndefined();
   } finally {
     store.close();
   }

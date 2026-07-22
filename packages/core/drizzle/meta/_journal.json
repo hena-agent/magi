@@ -8,6 +8,13 @@
       "when": 1782408281087,
       "tag": "0000_exotic_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784647894063,
+      "tag": "0001_right_sasquatch",
+      "breakpoints": true
     }
   ]
 }
