@@ -222,6 +222,8 @@ Status: complete.
 Implemented behavior:
 
 - Borderless transcript with semantic tool/reasoning status colors.
+- Mouse wheel transcript scrolling and clickable tool/reasoning reveal in fullscreen terminals.
+- Empty-composer Up/Down transcript scrolling while preserving prompt history navigation during input.
 - Two-line responsive MAGI run rail.
 - Centered repository landing state with responsive MAGI artwork: a full ASCII wordmark on wide
   terminals and a compact one-line mark on narrow terminals.
@@ -248,4 +250,15 @@ Before adopting any alternative renderer, require a short spike proving:
 1. Use the fullscreen Ink UI as the normal development path and collect concrete friction reports.
 2. Add focused regression cases when real permission/question/session workflows expose layout issues.
 3. Defer command-dispatch extraction until command behavior needs modification.
-4. Consider alternative renderer research only if Ink fails a concrete product requirement.
+4. Keep mouse interactions limited to transcript scrolling and reveal until overlays need concrete pointer workflows.
+
+## Transcript Input
+
+Fullscreen terminals enable SGR mouse reporting while MAGI owns the alternate screen. The mouse wheel
+scrolls the transcript, and left-clicking a tool or reasoning summary toggles its details. Terminals that
+do not report SGR mouse events retain the complete keyboard path.
+
+When the composer is empty, Up/Down scroll one transcript line; PageUp/PageDown scroll by a larger step,
+Home/End jump to the bounds, and `j`/`k` plus Enter/Space select and reveal details. While the composer
+contains text, Up/Down continue to navigate prompt history. Native text selection may require Shift-drag
+while mouse reporting is active.

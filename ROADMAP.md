@@ -117,7 +117,7 @@
 - [x] Improve question prompts with option selection, custom answers, and multi-select handling.
 - [x] Render tool activity as concise cards with status, changed paths, command summaries, and collapsed long output.
 - [x] Add visible running state for thinking, active tool, queued prompts, permissions, and background tasks.
-- [x] Establish Ink as the production TUI renderer and defer mouse support, rich diff viewing, and timeline branching until the daily-driver loop is stable.
+- [x] Establish Ink as the production TUI renderer, add scoped transcript wheel/click support, and defer rich diff viewing and timeline branching until the daily-driver loop is stable.
 
 ## Phase 5: Assistant Integration
 - [ ] Add MAGI trigger policy for risky work.
