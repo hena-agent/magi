@@ -1159,7 +1159,7 @@ export function AppController(props: {
           `Proposed patch saved as event #${event.sequence}. Requesting write approval...`,
         );
         return await executeToolAction(
-          actionToolCall("apply_patch", { patch: action.patch }),
+          actionToolCall("apply_patch", { patchText: action.patch }),
           agent,
         );
       }
@@ -2107,7 +2107,7 @@ export function AppController(props: {
     const operation = startForegroundOperation();
     if (!operation) return;
     try {
-      await runToolWithPermission(createToolCall("apply_patch", { patch }));
+      await runToolWithPermission(createToolCall("apply_patch", { patchText: patch }));
     } catch (error) {
       if (!isAbortError(error, operation.controller.signal)) throw error;
     } finally {
