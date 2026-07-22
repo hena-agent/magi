@@ -44,13 +44,13 @@ export function readTerminalDimension(value: number | undefined, fallback: numbe
 }
 
 export function enterAlternateScreen(stdout: TerminalWriter = process.stdout): () => void {
-  stdout.write("\u001b[?1049h\u001b[?25l");
+  stdout.write("\u001b[?1049h\u001b[?25l\u001b[?1000h\u001b[?1006h");
 
   let restored = false;
   return () => {
     if (restored) return;
     restored = true;
-    stdout.write("\u001b[?25h\u001b[?1049l");
+    stdout.write("\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l");
   };
 }
 

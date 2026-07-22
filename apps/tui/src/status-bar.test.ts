@@ -4,7 +4,7 @@ import { getFooterShortcutText } from "./status-bar.js";
 describe("getFooterShortcutText", () => {
   it("shows default shortcuts when no overlay is active", () => {
     expect(getFooterShortcutText(undefined)).toBe(
-      "/model · /agent · /sessions · /help · ctrl+c exit",
+      "↑/↓/wheel scroll · click reveal · /help · ctrl+c exit",
     );
   });
 

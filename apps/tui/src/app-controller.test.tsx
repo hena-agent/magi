@@ -50,6 +50,40 @@ it("loads configuration for the selected target directory", () => {
   }
 });
 
+it("scrolls the transcript with Up when the composer is empty", async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-controller-scroll-"));
+  const store = createSessionStore({ workspaceRoot });
+  const mount = mountController({
+    config: testConfig(workspaceRoot, "new"),
+    store,
+    adapter: textAdapter("A completed response with enough text for the transcript."),
+    runTool: async (call) => successfulTool(call, []),
+    fullscreen: true,
+  });
+
+  try {
+    for (let index = 1; index <= 6; index += 1) {
+      await submitInput(mount.streams, `Prompt ${index}`);
+      await waitFor(() => sessionHasAnswers(store, index), `answer ${index}`);
+    }
+
+    mount.streams.stdin.write("\u001b[A");
+    await waitFor(
+      () => mount.streams.readOutput().includes("1 lines back"),
+      "Up arrow transcript scroll",
+      mount.streams.readOutput,
+    );
+    mount.streams.stdin.write("\u001b[<64;10;10M");
+    await waitFor(
+      () => mount.streams.readOutput().includes("4 lines back"),
+      "mouse wheel transcript scroll",
+      mount.streams.readOutput,
+    );
+  } finally {
+    mount.app.unmount();
+  }
+});
+
 it("persists a tool turn and queued turn in one resumable session", async () => {
   const workspaceRoot = mkdtempSync(join(tmpdir(), "magi-controller-lifecycle-"));
   const firstStep = deferred<void>();

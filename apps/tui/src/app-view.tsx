@@ -7,7 +7,7 @@ import type { SlashCommandInfo } from "./slash-commands.js";
 import { FooterBar, type OverlayMode, StatusBar } from "./status-bar.js";
 import { getTerminalLayout, type TerminalSize, type TuiLayoutMode } from "./terminal-layout.js";
 import type { TranscriptMessage } from "./transcript-types.js";
-import { TranscriptView } from "./transcript-view.js";
+import { type TranscriptMouseTarget, TranscriptView } from "./transcript-view.js";
 
 export type AppViewProps = {
   activeStatus: string;
@@ -40,6 +40,7 @@ export type AppViewProps = {
   transcriptScrollOffset: number;
   transcriptLineLimit: number | undefined;
   onTranscriptLineLimitChange: (lineLimit: number) => void;
+  onTranscriptMouseTargetChange: (key: string, target: TranscriptMouseTarget | undefined) => void;
   terminalSize: TerminalSize;
   workspaceRoot: string;
 };
@@ -186,6 +187,7 @@ function FullscreenTranscriptView(props: AppViewProps & { compact: boolean }) {
       fullscreen
       compact={props.compact}
       onLineLimitChange={props.onTranscriptLineLimitChange}
+      onMouseTargetChange={props.onTranscriptMouseTargetChange}
     />
   );
 }

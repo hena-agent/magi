@@ -24,6 +24,7 @@ function props(overrides: Partial<AppViewProps> = {}): AppViewProps {
     messages: landingMessages,
     mode: "build",
     onTranscriptLineLimitChange: () => undefined,
+    onTranscriptMouseTargetChange: () => undefined,
     pendingPermission: undefined,
     pendingQuestion: undefined,
     pendingSelector: undefined,
@@ -115,6 +116,41 @@ describe("fullscreen AppView transcript", () => {
     expect(output).toContain("Fix the tests");
     expect(output).toContain("I will inspect them.");
     expect(output).not.toContain("┌");
+  });
+
+  it("registers tool summary rows as mouse targets", () => {
+    const registeredTargets: Array<{ id: string; width: number; height: number }> = [];
+    const messages: TranscriptMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          {
+            id: "tool-1",
+            type: "tool",
+            tool: "bash",
+            state: {
+              input: { command: "pnpm test" },
+              output: "ok",
+              status: "completed",
+              time: { start: 1, end: 2 },
+            },
+          },
+        ],
+      },
+    ];
+    const input = props({
+      messages,
+      onTranscriptMouseTargetChange: (_key, target) => {
+        if (target) registeredTargets.push(target);
+      },
+    });
+
+    renderToString(<AppView {...input} />, { columns: input.terminalSize.width });
+
+    expect(registeredTargets).toEqual([
+      expect.objectContaining({ id: "tool-1", width: expect.any(Number), height: 1 }),
+    ]);
   });
 });
 

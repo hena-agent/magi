@@ -66,6 +66,14 @@ describe("formatTranscriptMessageLines reasoning", () => {
         selectedId: undefined,
       }).map((line) => line.text),
     ).toEqual(["  + Thought: Check the repo · 500ms", "  ▣ assistant"]);
+    expect(
+      formatTranscriptMessageLines({
+        expandedIds: new Set(),
+        first: true,
+        message,
+        selectedId: undefined,
+      })[0],
+    ).toMatchObject({ id: "reasoning-1", interactive: true });
 
     expect(
       formatTranscriptMessageLines({
@@ -124,6 +132,14 @@ describe("formatTranscriptMessageLines tools", () => {
       "  ok",
       "  ▣ assistant",
     ]);
+    expect(
+      formatTranscriptMessageLines({
+        expandedIds: new Set(),
+        first: true,
+        message,
+        selectedId: undefined,
+      })[0],
+    ).toMatchObject({ id: "tool-1", interactive: true });
   });
 
   it("formats interrupted tools as interrupted", () => {

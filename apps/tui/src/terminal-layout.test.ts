@@ -42,7 +42,10 @@ describe("terminal layout helpers", () => {
     restore();
     restore();
 
-    expect(writes).toEqual(["\u001b[?1049h\u001b[?25l", "\u001b[?25h\u001b[?1049l"]);
+    expect(writes).toEqual([
+      "\u001b[?1049h\u001b[?25l\u001b[?1000h\u001b[?1006h",
+      "\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l",
+    ]);
   });
 
   it("selects responsive density and dock limits", () => {

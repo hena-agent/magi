@@ -85,7 +85,7 @@ export function getFooterShortcutText(overlayMode: InputMode | undefined): strin
     case "suggestions":
       return "↑/↓ select · tab/enter complete";
     default:
-      return "/model · /agent · /sessions · /help · ctrl+c exit";
+      return "↑/↓/wheel scroll · click reveal · /help · ctrl+c exit";
   }
 }
 
@@ -100,7 +100,7 @@ function getCompactFooterText(overlayMode: InputMode | undefined): string {
     case "suggestions":
       return "↑↓ select · enter complete";
     default:
-      return "/help · ctrl+c exit";
+      return "↑↓/wheel scroll · click reveal";
   }
 }
 

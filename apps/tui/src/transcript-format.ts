@@ -7,6 +7,7 @@ export type TranscriptLine = {
   id: string;
   key: string;
   text: string;
+  interactive?: boolean;
   dim?: boolean;
   bold?: boolean;
   color?: string;
@@ -127,6 +128,7 @@ function formatAssistantPartLines(
       nextLine({
         id: part.id,
         text: `${selected ? "›" : " "} ${expanded ? "-" : "+"} ${label}${summary.title ? `: ${summary.title}` : ""}${duration ? ` · ${duration}` : ""}`,
+        interactive: true,
         color: "yellow",
         dim: true,
         selected,
@@ -149,6 +151,7 @@ function formatAssistantPartLines(
       nextLine({
         id: part.id,
         text: `${selected ? "›" : " "} ${toolIcon(part.tool)} ${summary}${hasToolDetail(part) ? (expanded ? " [-]" : " [+]") : ""}`,
+        interactive: hasToolDetail(part),
         dim:
           part.state.status !== "error" &&
           part.state.status !== "denied" &&

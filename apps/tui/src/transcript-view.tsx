@@ -26,6 +26,15 @@ type TranscriptViewProps = {
   compact?: boolean;
   fullscreen?: boolean;
   onLineLimitChange?: (lineLimit: number) => void;
+  onMouseTargetChange?: (key: string, target: TranscriptMouseTarget | undefined) => void;
+};
+
+export type TranscriptMouseTarget = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 export function TranscriptView(props: TranscriptViewProps) {
@@ -67,6 +76,7 @@ export function TranscriptView(props: TranscriptViewProps) {
         showDashboard={showDashboard}
         visibleLines={visibleLines}
         workspaceRoot={props.workspaceRoot}
+        onMouseTargetChange={props.onMouseTargetChange}
       />
       {showChrome ? (
         <TranscriptFooter
@@ -135,6 +145,7 @@ function TranscriptBody(props: {
   visibleLines: ReturnType<typeof getTranscriptVisibleLineWindow>["visibleLines"];
   workspaceRoot: string;
   compact: boolean;
+  onMouseTargetChange?: TranscriptViewProps["onMouseTargetChange"];
 }) {
   if (props.showDashboard) {
     return (
@@ -150,15 +161,51 @@ function TranscriptBody(props: {
   if (props.visibleLines.length === 0) return <Text dimColor>No messages yet.</Text>;
 
   return props.visibleLines.map((line) => (
-    <Text
+    <TranscriptLineView
       key={line.key}
-      dimColor={line.selected ? false : line.dim}
-      bold={line.selected || line.bold}
-      color={line.color}
-    >
-      {line.text}
-    </Text>
+      line={line}
+      onMouseTargetChange={props.onMouseTargetChange}
+    />
   ));
+}
+
+function TranscriptLineView(props: {
+  line: ReturnType<typeof getTranscriptVisibleLineWindow>["visibleLines"][number];
+  onMouseTargetChange?: TranscriptViewProps["onMouseTargetChange"];
+}) {
+  const lineRef = useRef<DOMElement>(null);
+
+  useLayoutEffect(() => {
+    if (!props.line.interactive || !lineRef.current || !props.onMouseTargetChange) return;
+    const { x, y } = getElementPosition(lineRef.current);
+    const { width, height } = measureElement(lineRef.current);
+    props.onMouseTargetChange(props.line.key, { id: props.line.id, x, y, width, height });
+    return () => props.onMouseTargetChange?.(props.line.key, undefined);
+  });
+
+  return (
+    <Box ref={lineRef}>
+      <Text
+        dimColor={props.line.selected ? false : props.line.dim}
+        bold={props.line.selected || props.line.bold}
+        color={props.line.color}
+      >
+        {props.line.text}
+      </Text>
+    </Box>
+  );
+}
+
+function getElementPosition(element: DOMElement): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  let current: DOMElement | undefined = element;
+  while (current) {
+    x += current.yogaNode?.getComputedLeft() ?? 0;
+    y += current.yogaNode?.getComputedTop() ?? 0;
+    current = current.parentNode;
+  }
+  return { x, y };
 }
 
 function TranscriptHeader(props: {
@@ -207,7 +254,7 @@ function TranscriptFooter(props: {
       </Text>
       <Text dimColor>
         {props.canReadInput
-          ? "Shortcuts: /model switch model /agent switch agent /sessions resume /help commands ctrl+c exit"
+          ? "Shortcuts: ↑/↓ or wheel scroll · click tool/reasoning to reveal · /help commands"
           : "Watching for changes. Stop the dev process to quit."}
       </Text>
     </Box>
@@ -256,7 +303,12 @@ const MAGI_LOGO = [
 ];
 
 function MagiLogo(props: { compact: boolean }) {
-  if (props.compact) return <Text color="cyan" bold>[ MAGI ]</Text>;
+  if (props.compact)
+    return (
+      <Text color="cyan" bold>
+        [ MAGI ]
+      </Text>
+    );
 
   return (
     <Box flexDirection="column" marginBottom={1}>

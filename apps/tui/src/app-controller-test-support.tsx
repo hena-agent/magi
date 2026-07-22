@@ -19,6 +19,7 @@ export function mountController(input: {
   runTool: AppControllerDependencies["runTool"];
   adapterSessionIds?: string[];
   lifecycle?: AppLifecycle;
+  fullscreen?: boolean;
   targetDirectory?: string;
   loadConfigOptions?: Array<LoadConfigOptions | undefined>;
   createSessionStoreOptions?: Array<Parameters<AppControllerDependencies["createSessionStore"]>[0]>;
@@ -42,6 +43,7 @@ export function mountController(input: {
         runTool: input.runTool,
       }}
       lifecycle={input.lifecycle}
+      fullscreen={input.fullscreen === true}
       {...(input.targetDirectory === undefined ? {} : { targetDirectory: input.targetDirectory })}
     />,
     {

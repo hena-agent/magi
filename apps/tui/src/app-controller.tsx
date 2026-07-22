@@ -43,7 +43,7 @@ import {
 } from "@magi/core";
 import { runVerificationCommands } from "@magi/harness";
 import { useApp, useInput, useStdin } from "ink";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createToolCallForExecutableAction } from "./agent-action-tool-call.js";
 import {
   type AppControllerDependencies,
@@ -101,7 +101,9 @@ import {
   parseJsonInput,
 } from "./transcript-tool-display.js";
 import type { TranscriptMessage, TranscriptPart } from "./transcript-types.js";
+import type { TranscriptMouseTarget } from "./transcript-view.js";
 import { normalizeInkInputEvent } from "./tui-key-event.js";
+import { parseTuiMouseEvent, type TuiMouseEvent } from "./tui-mouse-event.js";
 import {
   createInitialSession,
   createSessionStartMessage,
@@ -238,6 +240,7 @@ export function AppController(props: {
   const activeRunProgressRef = useRef<ActiveRunProgress>(createEmptyRunProgress());
   const liveAssistantStreamsRef = useRef<Map<string, LiveAssistantStream>>(new Map());
   const liveToolActivitiesRef = useRef<Map<string, LiveToolActivity>>(new Map());
+  const transcriptMouseTargetsRef = useRef<Map<string, TranscriptMouseTarget>>(new Map());
   const [session, setSession] = useState<Session | undefined>(initialSession.session);
   const [activeAgent, setActiveAgent] = useState<AgentInfo>(() => {
     const events = initialSession.session ? store.listEvents(initialSession.session.id) : [];
@@ -354,6 +357,14 @@ export function AppController(props: {
     setMeasuredTranscriptLineLimit((current) => (current === lineLimit ? current : lineLimit));
   }
 
+  const updateTranscriptMouseTarget = useCallback(
+    (key: string, target: TranscriptMouseTarget | undefined): void => {
+      if (target) transcriptMouseTargetsRef.current.set(key, target);
+      else transcriptMouseTargetsRef.current.delete(key);
+    },
+    [],
+  );
+
   function isPlanFilePath(filePath: string): boolean {
     return filePath === getPlanFilePath();
   }
@@ -376,6 +387,11 @@ export function AppController(props: {
 
   useInput(
     (input, key) => {
+      const mouseEvent = parseTuiMouseEvent(input);
+      if (mouseEvent) {
+        handleMouseInput(mouseEvent);
+        return;
+      }
       const event = normalizeInkInputEvent(input, key);
 
       if (event.name === "c" && event.ctrl) {
@@ -438,7 +454,8 @@ export function AppController(props: {
           );
           return;
         }
-        showPreviousPromptHistory();
+        if (promptStateRef.current.prompt.length === 0) scrollTranscript(1);
+        else showPreviousPromptHistory();
         return;
       }
 
@@ -447,7 +464,8 @@ export function AppController(props: {
           setSlashSelectionIndex((index) => (index + 1) % slashCommandSuggestions.length);
           return;
         }
-        showNextPromptHistory();
+        if (promptStateRef.current.prompt.length === 0) scrollTranscript(-1);
+        else showNextPromptHistory();
         return;
       }
 
@@ -680,6 +698,28 @@ export function AppController(props: {
     );
   }
 
+  function handleMouseInput(event: TuiMouseEvent): void {
+    if (layoutMode !== "fullscreen" || pendingPermission || pendingQuestion || pendingSelector) {
+      return;
+    }
+    if (event.type === "wheel") {
+      scrollTranscript(event.direction === "up" ? 3 : -3);
+      return;
+    }
+    if (event.type !== "press" || event.button !== "left") return;
+
+    const target = [...transcriptMouseTargetsRef.current.values()].find(
+      (candidate) =>
+        event.x >= candidate.x &&
+        event.x < candidate.x + candidate.width &&
+        event.y >= candidate.y &&
+        event.y < candidate.y + candidate.height,
+    );
+    if (!target) return;
+    setSelectedMessageId(target.id);
+    toggleMessageExpansion(target.id);
+  }
+
   function scrollTranscriptToStart(): void {
     setTranscriptScrollOffset(
       scrollTranscriptToStartOffset({
@@ -711,11 +751,15 @@ export function AppController(props: {
   }
 
   function toggleSelectedMessageExpansion(): void {
+    toggleMessageExpansion(selectedMessageId);
+  }
+
+  function toggleMessageExpansion(messageId: string | undefined): void {
     setExpandedMessageIds((expandedIds) => {
       const next = toggleTranscriptExpansion({
         messages,
         expandedIds,
-        selectedId: selectedMessageId,
+        selectedId: messageId,
         scrollOffset: transcriptScrollOffset,
         lineLimit: transcriptLineLimit,
       });
@@ -3382,6 +3426,7 @@ export function AppController(props: {
       transcriptScrollOffset={transcriptScrollOffset}
       transcriptLineLimit={transcriptLineLimit}
       onTranscriptLineLimitChange={updateMeasuredTranscriptLineLimit}
+      onTranscriptMouseTargetChange={updateTranscriptMouseTarget}
       terminalSize={terminalSize}
       workspaceRoot={config.workspaceRoot}
     />
