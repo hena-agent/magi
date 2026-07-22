@@ -107,6 +107,17 @@ Run the built TUI app:
 pnpm --filter @magi/tui start
 ```
 
+Pass a target directory to start a session for another workspace. Relative paths are resolved from
+the directory where the command was launched:
+
+```sh
+magi ../demo-project
+pnpm --filter @magi/tui start -- ../demo-project
+```
+
+When no directory is provided, MAGI uses the current workspace as before. Sessions, configuration,
+project instructions, tools, and verification commands all use the selected workspace root.
+
 For source execution during debugging, use:
 
 ```sh
